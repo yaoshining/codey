@@ -43,7 +43,16 @@ function fixture(t) {
 	writeFileSync(join(source, "packages/coding-agent/package.json"), '{"type":"module","version":"1.6.0"}\n');
 	writeFileSync(
 		join(source, "codey/hydrate-model-data.mjs"),
-		'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("../hydrated", import.meta.url), "fixture hydrated\\n");\n',
+		`import { writeFileSync } from "node:fs";
+if (process.env.CODEY_TEST_HYDRATE_FAIL === "1") {
+	console.log("fixture hydration stdout diagnostic");
+	console.error("fixture hydration stderr diagnostic");
+	process.exitCode = 42;
+} else {
+	writeFileSync(new URL("../hydrated", import.meta.url), "fixture hydrated\\n");
+	console.log("Prepared Pi model metadata fixture");
+}
+`,
 	);
 	writeFileSync(join(agent, "experimental/source-resolver.ts"), "// The test CLI needs no source aliases.\n");
 	writeFileSync(
@@ -132,6 +141,7 @@ if (command === "init") {
 import { appendFileSync, mkdirSync } from "node:fs";
 appendFileSync(process.env.CODEY_TEST_LOG, JSON.stringify({ command: "npm", args: process.argv.slice(2) }) + "\\n");
 if (process.env.CODEY_TEST_NPM_FAIL === "1") process.exit(43);
+console.error("npm warn fixture dependency warning");
 mkdirSync("node_modules", { recursive: true });
 `,
 	);
@@ -247,6 +257,9 @@ test("installer fetches the pinned revision, installs without lifecycle scripts 
 	const result = run();
 	assert.ifError(result.error);
 	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /Installed Codey/);
+	assert.doesNotMatch(result.stdout + result.stderr, /Prepared Pi model metadata|installation check passed|SHA256/);
+	assert.match(result.stderr, /npm warn fixture dependency warning/);
 	assert.equal(readlinkSync(join(binDir, "codey")), join(installDir, revision, "codey/bin/codey"));
 	assert.equal(readFileSync(join(installDir, revision, "hydrated"), "utf8"), "fixture hydrated\n");
 	assert.equal(readFileSync(join(binDir, "pi"), "utf8"), "existing Pi executable\n");
@@ -285,10 +298,37 @@ test("reinstalling a verified revision does not fetch, reinstall or duplicate sh
 	assert.equal(first.status, 0, first.stderr);
 	const second = run();
 	assert.equal(second.status, 0, second.stderr);
+	assert.doesNotMatch(second.stdout + second.stderr, /installation check passed|SHA256/);
 	assert.equal(commands().filter((call) => call.command === "npm").length, 1);
 	assert.equal(commands().filter((call) => call.args.includes("fetch")).length, 1);
 	const profile = readFileSync(join(zshDir, ".zshrc"), "utf8");
 	assert.equal(profile.split("# Codey CLI path").length - 1, 1);
+});
+
+test("failed hydration exposes both diagnostic streams and does not install the command", (t) => {
+	const { run, binDir, installDir } = installFixture(t);
+	const result = run(revision, { CODEY_TEST_HYDRATE_FAIL: "1" });
+	assert.equal(result.status, 42);
+	assert.match(result.stderr, /fixture hydration stdout diagnostic/);
+	assert.match(result.stderr, /fixture hydration stderr diagnostic/);
+	assert.equal(existsSync(join(binDir, "codey")), false);
+	assert.deepEqual(readdirSync(installDir), []);
+});
+
+test("failed smoke check exposes diagnostics and preserves the prior working entry", (t) => {
+	const { run, source, installDir, binDir } = installFixture(t);
+	assert.equal(run().status, 0);
+	const previous = readlinkSync(join(binDir, "codey"));
+	writeFileSync(
+		join(source, "codey/smoke.mjs"),
+		'console.log("fixture smoke stdout diagnostic");\nconsole.error("fixture smoke stderr diagnostic");\nprocess.exitCode = 44;\n',
+	);
+	const result = run("a".repeat(40));
+	assert.equal(result.status, 44);
+	assert.match(result.stderr, /fixture smoke stdout diagnostic/);
+	assert.match(result.stderr, /fixture smoke stderr diagnostic/);
+	assert.equal(readlinkSync(join(binDir, "codey")), previous);
+	assert.deepEqual(readdirSync(installDir), [revision]);
 });
 
 test("failed dependency installation preserves the prior working entry and removes staging files", (t) => {

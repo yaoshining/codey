@@ -32,22 +32,29 @@ fi
 STAGE="$(mktemp -d "$INSTALL_DIR/.install.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
-# Isolate the smoke check from the user's project, settings, extensions and auth.
-check_cli() {
-  node "$1/codey/smoke.mjs"
+# Hide internal success summaries, but surface both streams on failure.
+run_install_check() {
+  local status
+  if node "$1" > "$STAGE/check-output"; then
+    return 0
+  else
+    status=$?
+    cat "$STAGE/check-output" >&2
+    return "$status"
+  fi
 }
 
 if [[ -e "$CHECKOUT" ]]; then
   [[ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$REVISION" ]] || fail "Existing checkout has a different revision: $CHECKOUT"
-  check_cli "$CHECKOUT"
+  run_install_check "$CHECKOUT/codey/smoke.mjs"
 else
   git init -q "$STAGE/checkout"
   git -C "$STAGE/checkout" fetch --quiet --depth 1 https://github.com/yaoshining/codey.git "$REVISION"
   git -C "$STAGE/checkout" checkout --quiet --detach FETCH_HEAD
   [[ "$(git -C "$STAGE/checkout" rev-parse HEAD)" = "$REVISION" ]] || fail "Downloaded checkout does not match $REVISION."
   (cd "$STAGE/checkout" && npm ci --ignore-scripts --no-audit --no-fund)
-  node "$STAGE/checkout/codey/hydrate-model-data.mjs"
-  check_cli "$STAGE/checkout"
+  run_install_check "$STAGE/checkout/codey/hydrate-model-data.mjs"
+  run_install_check "$STAGE/checkout/codey/smoke.mjs"
   mv "$STAGE/checkout" "$CHECKOUT"
 fi
 
