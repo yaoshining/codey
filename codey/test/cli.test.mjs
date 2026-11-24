@@ -7,6 +7,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	realpathSync,
 	readFileSync,
 	readdirSync,
 	readlinkSync,
@@ -25,7 +26,7 @@ const installer = join(repository, "codey/install.sh");
 const revision = "0123456789abcdef0123456789abcdef01234567";
 
 function fixture(t) {
-	const directory = mkdtempSync(join(tmpdir(), "codey-cli-test-"));
+	const directory = mkdtempSync(join(realpathSync(tmpdir()), "codey-cli-test-"));
 	t.after(() => rmSync(directory, { recursive: true, force: true }));
 	const source = join(directory, "source checkout ' #?%");
 	const bin = join(source, "codey/bin");
