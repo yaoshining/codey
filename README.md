@@ -8,7 +8,11 @@
 
 Codey is a fork of [Pi](https://github.com/earendil-works/pi) for working on code from the terminal. Start it in a project directory to explore files, make edits, run commands, and return to saved sessions.
 
-This repository is in early development. It currently retains Pi's CLI and package names. The instructions below run this checkout directly; the upstream Pi installer does not install Codey.
+This repository is in early development. Its independent `codey` launcher runs this checkout's Pi CLI with the same functionality. Existing `pi` commands, package names, configuration and sessions are preserved. Help text and the interactive interface still use Pi's name.
+
+## Install Codey
+
+On macOS or Linux, install a reviewed commit using the [Codey installer](codey/README.md). It requires Git, npm and Node.js 22.19 or newer, installs into your home directory without sudo, and adds `codey` to your shell's PATH. It does not install anything globally through npm. The upstream Pi installer does not install Codey.
 
 ## Run from source
 
@@ -17,18 +21,19 @@ You need Git and Node.js 22.19 or newer. On macOS or Linux:
 ```bash
 git clone https://github.com/yaoshining/codey.git
 cd codey
-npm install --ignore-scripts
-./pi-test.sh --help
+npm ci --ignore-scripts
+node codey/hydrate-model-data.mjs
+./codey/bin/codey --help
 ```
 
 To work on another project, launch from that project's directory:
 
 ```bash
 cd /path/to/project
-/path/to/codey/pi-test.sh
+/path/to/codey/codey/bin/codey
 ```
 
-On Windows, use `pi-test.ps1` from the checkout in place of `pi-test.sh`. Inside the interactive session, run `/login` to set up a supported provider, or follow the [provider setup guide](packages/coding-agent/docs/providers.md).
+The Codey launcher currently supports macOS and Linux. On Windows, the existing `pi-test.ps1` remains available. Inside the interactive session, run `/login` to set up a supported provider, or follow the [provider setup guide](packages/coding-agent/docs/providers.md).
 
 ## Extend or automate it
 

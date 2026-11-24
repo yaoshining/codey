@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run this checkout's Pi CLI without changing its arguments or configuration.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" = /* ]] || SOURCE="$SOURCE_DIR/$SOURCE"
+done
+REPO_DIR="$(cd -P "$(dirname "$SOURCE")/../.." && pwd)"
+
+# --import needs a file URL when the checkout path contains #, ? or %.
+RESOLVER_URL="$(node -p 'require("node:url").pathToFileURL(process.argv[1]).href' "$REPO_DIR/packages/coding-agent/src/experimental/source-resolver.ts")"
+exec node --import "$RESOLVER_URL" "$REPO_DIR/packages/coding-agent/src/cli.ts" "$@"
