@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { matchesKey, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 
 const limit = 64 * 1024;
 const diffOptions = [
@@ -114,29 +114,41 @@ function showReport(ctx, scope, content) {
 		return;
 	}
 	return ctx.ui.custom(
-		(tui, theme, _keybindings, done) => {
+		(tui, theme, keybindings, done) => {
 			const body = new Text(report, 1, 0);
 			let offset = 0;
 			let pageSize = 1;
+			const controls = [
+				["up", () => offset--, "tui.select.up"],
+				["down", () => offset++, "tui.select.down"],
+				["previous page", () => (offset -= pageSize), "tui.select.pageUp"],
+				["next page", () => (offset += pageSize), "tui.select.pageDown"],
+				["top", () => (offset = 0), "tui.altScreen.top"],
+				["bottom", () => (offset = Number.MAX_SAFE_INTEGER), "tui.altScreen.bottom"],
+				["close", () => done(undefined), "tui.select.cancel", "tui.select.confirm"],
+			];
+			const hints = controls.flatMap(([label, , ...actions]) => {
+				const keys = actions.flatMap((action) => keybindings.getKeys(action));
+				return keys.length ? [`${keys.join("/")} ${label}`] : [];
+			});
+			const footerText = new Text(hints.join(" · "), 1, 0);
 			return {
 				render(width) {
 					const lines = body.render(width);
 					const heading = new Text(theme.bold(title), 1, 0).render(width);
-					const footer = new Text("Up/Down · Page Up/Down · Home/End · Esc to close", 1, 0).render(width);
+					const footer = footerText.render(width);
 					pageSize = Math.max(1, tui.terminal.rows - heading.length - footer.length - 2);
 					offset = Math.max(0, Math.min(offset, lines.length - pageSize));
 					return [...heading, ...lines.slice(offset, offset + pageSize), ...footer];
 				},
 				invalidate: () => body.invalidate(),
 				handleInput(input) {
-					if (matchesKey(input, "escape") || matchesKey(input, "enter")) return done(undefined);
-					if (matchesKey(input, "down")) offset++;
-					else if (matchesKey(input, "up")) offset--;
-					else if (matchesKey(input, "pageDown")) offset += pageSize;
-					else if (matchesKey(input, "pageUp")) offset -= pageSize;
-					else if (matchesKey(input, "home")) offset = 0;
-					else if (matchesKey(input, "end")) offset = Number.MAX_SAFE_INTEGER;
-					else return;
+					const control = controls.find(([, , ...actions]) =>
+						actions.some((action) => keybindings.matches(input, action)),
+					);
+					if (!control) return;
+					const [, run] = control;
+					run();
 					tui.requestRender();
 				},
 			};
