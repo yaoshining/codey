@@ -34,8 +34,7 @@ trap 'rm -rf "$STAGE"' EXIT
 
 # Isolate the smoke check from the user's project, settings, extensions and auth.
 check_cli() {
-  mkdir -p "$STAGE/smoke"
-  (cd "$STAGE/smoke" && PI_OFFLINE=1 PI_CODING_AGENT_DIR="$STAGE/agent" "$1/codey/bin/codey" --version)
+  node "$1/codey/smoke.mjs"
 }
 
 if [[ -e "$CHECKOUT" ]]; then

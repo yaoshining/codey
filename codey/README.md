@@ -1,8 +1,31 @@
 # Codey CLI
 
-`codey` starts this repository's Pi CLI. The wrapper passes every argument, the working directory, environment, input, output, exit status and signals through to the same upstream source entry. It does not change Pi source, package names or lockfiles, and does not replace any `pi` command.
+`codey` starts this repository's Pi CLI with its own default user directory, `~/.codey/agent`. The wrapper preserves arguments, working directory, input, output, exit status and signals. It sets directory overrides and a private help-display marker for the child process. Only the root and authentication help printers have inherited source changes; package names, lockfiles and the runtime identity remain unchanged.
 
-Pi's `.pi` configuration, credentials, extensions, sessions, help text and interactive interface retain their existing behavior and names. Both commands therefore share Pi settings. Codey adds only an executable name; rebranding the interface is outside this change.
+`codey --help` and `codey auth --help` use the Codey command name and effective directory. Internal `APP_NAME` remains `pi`: the interactive interface, other subcommand help and OAuth may still display Pi. MCP's automatic choice between client metadata documents and dynamic client registration remains Pi's original behavior. Project settings, extensions and trust checks continue to use project `.pi`.
+
+## User directories and explicit sharing
+
+The default Codey invocation does not inspect, copy or migrate `~/.pi/agent`. It starts with separate Codey settings, credentials, sessions and `trust.json`. An ordinary `pi` invocation from an independent shell keeps its original directory and help. No shell alias or global Pi package is replaced.
+
+Nonempty overrides have this precedence:
+
+| Setting | Highest to lowest priority |
+| --- | --- |
+| Agent directory | `CODEY_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR`, `~/.codey/agent` |
+| Session directory | `--session-dir`, `CODEY_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_SESSION_DIR`, upstream configured/default session directory |
+
+Empty environment values count as absent. Codey maps the selected values to Pi's existing environment variables only in the launched process; it does not modify the parent shell. `PI_PACKAGE_DIR`, provider credential variables, `PI_OFFLINE` and other Pi switches pass through unchanged. Codey does not set `piConfig.name` or replace the package asset root, so themes, documentation, templates and version metadata retain their upstream locations.
+
+To explicitly share the old Pi state without copying it:
+
+```bash
+CODEY_CODING_AGENT_DIR="$HOME/.pi/agent" codey
+```
+
+This shares **writable** settings, credentials, sessions and trust records. Normal Pi startup may migrate legacy configuration or sessions **inside the directory you selected**. It is not a read-only mode. The legacy `PI_CODING_AGENT_DIR` override also remains supported. No sharing command is run automatically.
+
+The wrapper sets `CODEY_CLI_HELP=1` solely for the two help printers. Pi runtime markers (`AI_AGENT=pi`, `PI_CODING_AGENT=true`) and shell-tool `PI_*` session metadata remain unchanged. Child processes inherit these variables, directory overrides and the help marker; a nested Pi launched inside Codey can therefore share Codey's selected state and help display. Launch stock Pi from an independent shell for its normal defaults.
 
 ## Install a reviewed commit
 
@@ -18,7 +41,9 @@ Replace `FULL_COMMIT_SHA` below with the reviewed 40-character commit. Use the s
 
 The final `export` enables the command in the current terminal. The installer adds the same PATH entry to zsh's `${ZDOTDIR:-$HOME}/.zshrc`, or Bash's `.bashrc` and first active login profile. Other shells receive a PATH instruction. Existing file contents are preserved, and rerunning the same installation does not duplicate the PATH entry.
 
-The installer places an isolated checkout at `~/.local/share/codey/<commit>` and a symlink at `~/.local/bin/codey`. It checks the CLI before replacing the link, reuses an already installed revision, and refuses to overwrite an unrelated command. Installation downloads npm dependencies but does not call a model provider. It does not install or change Pi globally.
+The installer places an isolated checkout at `~/.local/share/codey/<commit>` and a symlink at `~/.local/bin/codey`. Before replacing the link, it runs `codey/smoke.mjs` with a temporary HOME containing distinct fake Pi and Codey models. Read-only RPC must select Codey's new model and stock Pi's old model; a SHA256 comparison checks that default Codey did not write the old fixture. The check uses offline mode, blocks sockets and sends no prompt. It does not inherit your real directory overrides or credentials.
+
+The installer reuses an already installed revision and refuses to overwrite an unrelated command. Installation downloads npm dependencies but does not call a model provider or change Pi globally.
 
 To customize locations, pass absolute `CODEY_INSTALL_DIR` and `CODEY_BIN_DIR` variables to the **bash process** in the pipeline. The current-terminal PATH export must then use that bin directory as well. Example from a checkout whose commit is already pushed:
 
@@ -49,9 +74,9 @@ node --test codey/test/*.test.mjs
 npm run check
 ```
 
-The wrapper uses the same source resolver as `pi-test.sh`, with a file URL so installation paths can contain spaces and URL metacharacters. Unlike the development helper, it does not consume the special `--no-env` argument. The existing `pi-test.sh` and `pi-test.ps1` are unchanged.
+The wrapper uses the same source resolver as `pi-test.sh`, with a file URL so installation paths can contain spaces and URL metacharacters. Unlike the development helper, it does not consume the special `--no-env` argument. The existing `pi-test.sh` and `pi-test.ps1` are unchanged. Run `node codey/smoke.mjs` to repeat the installation's isolated RPC check.
 
-Tests cover argument and stream forwarding, cwd, environment, exit status, process signals, symlinks, installation failures, repeat installation and shell PATH setup with temporary home directories. The runtime tests invoke `codey` from PATH and exercise the real CLI's version, help and read-only RPC (`get_state` and `get_messages`). They isolate configuration, enable offline mode and block socket connections; no prompt is sent. To test an installed copy, run `CODEY_TEST_BIN="$HOME/.local/bin/codey" node --test codey/test/runtime.test.mjs`.
+Tests cover argument and stream forwarding, cwd, exit status, process signals, symlinks, installation failures, repeat installation and shell PATH setup. Real CLI tests use temporary HOME directories, distinct fake credentials/models/sessions, old-tree hashes and metadata, explicit overrides, project `.pi` trust, resource loading and HTML export. No prompt is sent. The MCP tests invoke real `codey mcp login` against in-memory responses for both metadata-document-only and dynamic-registration-only servers; fake browser launchers complete only local callbacks and external sockets are blocked. To test an installed copy, run `CODEY_TEST_BIN="$HOME/.local/bin/codey" node --test codey/test/runtime.test.mjs codey/test/mcp-oauth.test.mjs`.
 
 The repository-wide check may report the inherited Mistral fixture errors for `ministral-14b-latest`. Compare with the same upstream baseline and treat additional diagnostics as regressions.
 

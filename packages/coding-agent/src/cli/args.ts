@@ -4,7 +4,7 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
-import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
+import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, getAgentDir } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import { getToolListError, type TuiMode } from "../core/settings-manager.ts";
 
@@ -271,6 +271,21 @@ export function parseArgs(args: string[]): Args {
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+	// Codey changes presentation only; Pi's runtime identity and project paths stay intact.
+	const codeyHelp = process.env.CODEY_CLI_HELP === "1";
+	const helpName = codeyHelp ? "codey" : APP_NAME;
+	const selfUpdateName = codeyHelp ? "codey" : "pi";
+	const selfUpdateTarget = codeyHelp ? "the Pi runtime" : "pi";
+	const sessionExample = codeyHelp
+		? `'${`${getAgentDir()}/sessions/--path--/session.jsonl`.replaceAll("'", "'\\''")}'`
+		: `~/${CONFIG_DIR_NAME}/agent/sessions/--path--/session.jsonl`;
+	const directoryVariables = codeyHelp
+		? `${"CODEY_CODING_AGENT_DIR".padEnd(32)} - Config override (default: ~/.codey/agent; effective: ${getAgentDir()})
+  ${"CODEY_CODING_AGENT_SESSION_DIR".padEnd(32)} - Session override (overridden by --session-dir)
+  ${ENV_AGENT_DIR.padEnd(32)} - Compatible config override when CODEY_CODING_AGENT_DIR is empty
+  ${ENV_SESSION_DIR.padEnd(32)} - Compatible session override when CODEY_CODING_AGENT_SESSION_DIR is empty`
+		: `${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
+  ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)`;
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
@@ -281,21 +296,21 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
+	console.log(`${chalk.bold(helpName)} - AI coding assistant with read, bash, edit, write tools
 
 ${chalk.bold("Usage:")}
-  ${APP_NAME} [options] [--] [@files...] [messages...]
+  ${helpName} [options] [--] [@files...] [messages...]
 
 ${chalk.bold("Commands:")}
-  ${APP_NAME} install <source> [-l]     Install extension source and add to settings
-  ${APP_NAME} remove <source> [-l]      Remove extension source from settings
-  ${APP_NAME} uninstall <source> [-l]   Alias for remove
-  ${APP_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
-  ${APP_NAME} list                      List installed extensions from settings
-  ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-  ${APP_NAME} auth <command>            Log in or out, print credentials, or check provider readiness
-  ${APP_NAME} mcp <command>             Manage MCP servers
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/mcp
+  ${helpName} install <source> [-l]     Install extension source and add to settings
+  ${helpName} remove <source> [-l]      Remove extension source from settings
+  ${helpName} uninstall <source> [-l]   Alias for remove
+  ${helpName} update [source|self|pi]   Update ${selfUpdateTarget}, extensions, or model catalogs
+  ${helpName} list                      List installed extensions from settings
+  ${helpName} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
+  ${helpName} auth <command>            Log in or out, print credentials, or check provider readiness
+  ${helpName} mcp <command>             Manage MCP servers
+  ${helpName} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/mcp
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider to search for --model (requires --model)
@@ -349,71 +364,71 @@ Extensions can register additional flags (e.g., --plan from plan-mode extension)
 
 ${chalk.bold("Examples:")}
   # Print a provider API key for an external client
-  ${APP_NAME} auth print-api-key --provider openai
+  ${helpName} auth print-api-key --provider openai
 
   # Print an OAuth bearer token for an external client (refreshes if expired)
-  ${APP_NAME} auth print-bearer-token --provider openai-codex
+  ${helpName} auth print-bearer-token --provider openai-codex
 
   # Interactive mode
-  ${APP_NAME}
+  ${helpName}
 
   # Interactive mode with initial prompt
-  ${APP_NAME} "List all .ts files in src/"
+  ${helpName} "List all .ts files in src/"
 
   # Include files in initial message
-  ${APP_NAME} @prompt.md @image.png "What color is the sky?"
+  ${helpName} @prompt.md @image.png "What color is the sky?"
 
   # Non-interactive mode (process and exit)
-  ${APP_NAME} -p "List all .ts files in src/"
+  ${helpName} -p "List all .ts files in src/"
 
   # Prompt beginning with a dash
-  ${APP_NAME} -p -- "- Summarize these points"
+  ${helpName} -p -- "- Summarize these points"
 
   # Multiple messages (interactive)
-  ${APP_NAME} "Read package.json" "What dependencies do we have?"
+  ${helpName} "Read package.json" "What dependencies do we have?"
 
   # Continue previous session
-  ${APP_NAME} --continue "What did we discuss?"
+  ${helpName} --continue "What did we discuss?"
 
   # Start a named session
-  ${APP_NAME} --name "Refactor auth module"
+  ${helpName} --name "Refactor auth module"
 
   # Use different model
-  ${APP_NAME} --provider openai --model gpt-4o-mini "Help me refactor this code"
+  ${helpName} --provider openai --model gpt-4o-mini "Help me refactor this code"
 
   # Use model with provider prefix (no --provider needed)
-  ${APP_NAME} --model openai/gpt-4o "Help me refactor this code"
+  ${helpName} --model openai/gpt-4o "Help me refactor this code"
 
   # Use model with thinking level shorthand
-  ${APP_NAME} --model sonnet:high "Solve this complex problem"
+  ${helpName} --model sonnet:high "Solve this complex problem"
 
   # Limit model cycling to specific models
-  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o
+  ${helpName} --models claude-sonnet,claude-haiku,gpt-4o
 
   # Limit to a specific provider with glob pattern
-  ${APP_NAME} --models "github-copilot/*"
+  ${helpName} --models "github-copilot/*"
 
   # Cycle models with fixed thinking levels
-  ${APP_NAME} --models sonnet:high,haiku:low
+  ${helpName} --models sonnet:high,haiku:low
 
   # Start with a specific thinking level
-  ${APP_NAME} --thinking high "Solve this complex problem"
+  ${helpName} --thinking high "Solve this complex problem"
 
   # Read-only mode (no file modifications possible)
-  ${APP_NAME} --tools read,grep,find,ls -p "Review the code in src/"
+  ${helpName} --tools read,grep,find,ls -p "Review the code in src/"
 
   # Add codemode to the default tools
-  ${APP_NAME} --tools +codemode
+  ${helpName} --tools +codemode
 
   # Codemode with only the tools of one MCP server
-  ${APP_NAME} --tools read,bash,codemode,'mcp__radius__*'
+  ${helpName} --tools read,bash,codemode,'mcp__radius__*'
 
   # Disable one tool while keeping the rest available
-  ${APP_NAME} --exclude-tools ask_question
+  ${helpName} --exclude-tools ask_question
 
   # Export a session file to HTML
-  ${APP_NAME} --export ~/${CONFIG_DIR_NAME}/agent/sessions/--path--/session.jsonl
-  ${APP_NAME} --export session.jsonl output.html
+  ${helpName} --export ${sessionExample}
+  ${helpName} --export session.jsonl output.html
 
 ${chalk.bold("Environment Variables:")}
   ANTHROPIC_AUTH_TOKEN             - Anthropic bearer auth token
@@ -461,11 +476,10 @@ ${chalk.bold("Environment Variables:")}
   AWS_SECRET_ACCESS_KEY            - AWS secret key for Amazon Bedrock
   AWS_BEARER_TOKEN_BEDROCK         - Bedrock API key (bearer token)
   AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
-  ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
-  ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
+  ${directoryVariables}
   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
   PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_SELF_UPDATE_COMMAND           - Command pi update runs to update pi itself ({packageName}, {version}, {installSpec})
+  PI_SELF_UPDATE_COMMAND           - Command ${selfUpdateName} update runs to update ${selfUpdateTarget} itself ({packageName}, {version}, {installSpec})
   PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
 
