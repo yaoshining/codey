@@ -19,9 +19,9 @@ On macOS or Linux, install a reviewed commit using the [Codey installer](codey/R
 You need Git and Node.js 22.19 or newer. On macOS or Linux:
 
 ```bash
-git clone --branch codey/cli-entry https://github.com/yaoshining/codey.git
+git clone https://github.com/yaoshining/codey.git
 cd codey
-npm install --ignore-scripts
+npm ci --ignore-scripts
 node codey/hydrate-model-data.mjs
 ./codey/bin/codey --help
 ```
