@@ -81,3 +81,11 @@ Tests cover argument and stream forwarding, cwd, exit status, process signals, s
 The repository-wide check may report the inherited Mistral fixture errors for `ministral-14b-latest`. Compare with the same upstream baseline and treat additional diagnostics as regressions.
 
 These tests run on the host platform; passing on Linux does not establish that the CLI was tested on macOS. The wrapper and installer use macOS-compatible Bash syntax and avoid GNU-only path tools.
+
+## Review changes
+
+In an interactive Codey session, run `/review` to review the repository's staged, unstaged and untracked changes. Run `/review main` or `/review origin/main` to also include commits since the merge base with that local or remote-tracking branch. Codey uses the refs already on disk.
+
+The command sends one request to your selected model and displays findings by priority with file and line references. Review input is limited to 64 KiB of diff and 100 untracked files. Ignored files, submodule contents, non-regular untracked files and binary contents are outside the review. Large changes are rejected with an explanation so you can narrow the review.
+
+The selected model receives the patch as data, without conversation history, tools or an execution loop. Codey collects the patch with fixed read-only Git commands. The patch can include unpublished code or secrets in changed files, and the selected provider may charge for the request. Offline mode blocks the model request. Disable the built-in command with `--no-extensions` or `-builtin:codey-review` in the `extensions` setting.
