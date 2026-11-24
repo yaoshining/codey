@@ -56,7 +56,7 @@ if (process.env.CODEY_TEST_HYDRATE_FAIL === "1") {
 	);
 	writeFileSync(join(agent, "experimental/source-resolver.ts"), "// The test CLI needs no source aliases.\n");
 	writeFileSync(
-		join(agent, "cli.ts"),
+		join(source, "codey/cli.mjs"),
 		`import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -94,6 +94,7 @@ if (process.env.CODEY_TEST_WAIT === "1") {
 }
 `,
 	);
+	copyFileSync(join(source, "codey/cli.mjs"), join(agent, "cli.ts"));
 	return { directory, source, cwd, entry: join(bin, "codey") };
 }
 

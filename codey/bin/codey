@@ -20,4 +20,4 @@ export CODEY_CLI_HELP=1
 
 # --import needs a file URL when the checkout path contains #, ? or %.
 RESOLVER_URL="$(node -p 'require("node:url").pathToFileURL(process.argv[1]).href' "$REPO_DIR/packages/coding-agent/src/experimental/source-resolver.ts")"
-exec node --import "$RESOLVER_URL" "$REPO_DIR/packages/coding-agent/src/cli.ts" "$@"
+exec node --import "$RESOLVER_URL" "$REPO_DIR/codey/cli.mjs" "$@"
