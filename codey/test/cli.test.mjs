@@ -37,6 +37,10 @@ function fixture(t) {
 	mkdirSync(cwd);
 	copyFileSync(wrapper, join(bin, "codey"));
 	chmodSync(join(bin, "codey"), 0o755);
+	copyFileSync(join(repository, "pi-test.sh"), join(source, "pi-test.sh"));
+	chmodSync(join(source, "pi-test.sh"), 0o755);
+	copyFileSync(join(repository, "codey/smoke.mjs"), join(source, "codey/smoke.mjs"));
+	writeFileSync(join(source, "packages/coding-agent/package.json"), '{"type":"module","version":"1.6.0"}\n');
 	writeFileSync(
 		join(source, "codey/hydrate-model-data.mjs"),
 		'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("../hydrated", import.meta.url), "fixture hydrated\\n");\n',
@@ -44,8 +48,25 @@ function fixture(t) {
 	writeFileSync(join(agent, "experimental/source-resolver.ts"), "// The test CLI needs no source aliases.\n");
 	writeFileSync(
 		join(agent, "cli.ts"),
-		`if (process.argv.includes("--version")) {
+		`import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+if (process.argv.includes("--version")) {
 	console.log("1.6.0");
+	process.exit(0);
+}
+if (process.argv.includes("rpc")) {
+	const dir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi/agent");
+	const settings = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+	let input = "";
+	for await (const chunk of process.stdin) input += chunk;
+	for (const line of input.trim().split("\\n")) {
+		const request = JSON.parse(line);
+		const data = request.type === "get_state"
+			? { model: { provider: settings.defaultProvider, id: settings.defaultModel } }
+			: { messages: [] };
+		console.log(JSON.stringify({ id: request.id, success: true, data }));
+	}
 	process.exit(0);
 }
 if (process.env.CODEY_TEST_WAIT === "1") {

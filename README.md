@@ -8,7 +8,7 @@
 
 Codey is a fork of [Pi](https://github.com/earendil-works/pi) for working on code from the terminal. Start it in a project directory to explore files, make edits, run commands, and return to saved sessions.
 
-This repository is in early development. Its independent `codey` launcher runs this checkout's Pi CLI with the same functionality. Existing `pi` commands, package names, configuration and sessions are preserved. Help text and the interactive interface still use Pi's name.
+This repository is in early development. Its independent `codey` launcher runs this checkout's Pi CLI and defaults to `~/.codey/agent` for user settings and sessions. Root and authentication help display Codey; the internal runtime, interactive interface and OAuth identity remain Pi. Existing `pi` commands and project `.pi` directories retain their behavior. Existing user data is not automatically imported.
 
 ## Install Codey
 

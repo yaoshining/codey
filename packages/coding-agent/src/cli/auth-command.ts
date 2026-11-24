@@ -1,5 +1,5 @@
 import type { AuthResult } from "@earendil-works/pi-ai";
-import { APP_NAME } from "../config.ts";
+import { APP_NAME, getAuthPath } from "../config.ts";
 import type { Args } from "./args.ts";
 
 export type AuthCommandKind = "check" | "api_key" | "bearer_token";
@@ -37,15 +37,18 @@ export function isAuthCommandHelp(args: string[]): boolean {
 }
 
 export function printAuthCommandHelp(): void {
+	const codeyHelp = process.env.CODEY_CLI_HELP === "1";
+	const helpName = codeyHelp ? "codey" : "pi";
+	const authPath = codeyHelp ? getAuthPath() : "~/.pi/agent/auth.json";
 	console.log(`Usage:
-  pi auth login <provider> [--api-key] [--no-browser]
-  pi auth logout <provider>
-  pi auth print-api-key [--provider <provider>] [--model <model>]
-  pi auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
-  pi auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
+  ${helpName} auth login <provider> [--api-key] [--no-browser]
+  ${helpName} auth logout <provider>
+  ${helpName} auth print-api-key [--provider <provider>] [--model <model>]
+  ${helpName} auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
+  ${helpName} auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
 
 Log in to and out of model providers, print their credentials for external clients, or check that they are ready.
-Credentials are stored in ~/.pi/agent/auth.json.
+Credentials are stored in ${authPath}.
 
 Commands:
   login <provider>        Sign in with an account in the browser, or save an API key, then exit
