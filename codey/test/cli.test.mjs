@@ -36,6 +36,10 @@ function fixture(t) {
 	mkdirSync(cwd);
 	copyFileSync(wrapper, join(bin, "codey"));
 	chmodSync(join(bin, "codey"), 0o755);
+	writeFileSync(
+		join(source, "codey/hydrate-model-data.mjs"),
+		'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("../hydrated", import.meta.url), "fixture hydrated\\n");\n',
+	);
 	writeFileSync(join(agent, "experimental/source-resolver.ts"), "// The test CLI needs no source aliases.\n");
 	writeFileSync(
 		join(agent, "cli.ts"),
@@ -222,6 +226,7 @@ test("installer fetches the pinned revision, installs without lifecycle scripts 
 	assert.ifError(result.error);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(readlinkSync(join(binDir, "codey")), join(installDir, revision, "codey/bin/codey"));
+	assert.equal(readFileSync(join(installDir, revision, "hydrated"), "utf8"), "fixture hydrated\n");
 	assert.equal(readFileSync(join(binDir, "pi"), "utf8"), "existing Pi executable\n");
 	const calls = commands();
 	assert.deepEqual(calls.find((call) => call.command === "npm").args, [

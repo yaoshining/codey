@@ -22,6 +22,7 @@ You need Git and Node.js 22.19 or newer. On macOS or Linux:
 git clone --branch codey/cli-entry https://github.com/yaoshining/codey.git
 cd codey
 npm install --ignore-scripts
+node codey/hydrate-model-data.mjs
 ./codey/bin/codey --help
 ```
 

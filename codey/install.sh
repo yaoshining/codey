@@ -6,7 +6,7 @@ fail() { printf 'Codey: %s\n' "$*" >&2; exit 1; }
 
 REVISION="${1:-}"
 [[ "$#" -eq 1 && "$REVISION" =~ ^[0-9a-f]{40}$ ]] || fail "Usage: bash codey/install.sh <full commit SHA>"
-for TOOL in git node npm; do
+for TOOL in git node npm tar; do
   command -v "$TOOL" >/dev/null 2>&1 || fail "$TOOL is required (Node.js 22.19 or newer)."
 done
 node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)' || fail "Node.js 22.19 or newer is required."
@@ -47,6 +47,7 @@ else
   git -C "$STAGE/checkout" checkout --quiet --detach FETCH_HEAD
   [[ "$(git -C "$STAGE/checkout" rev-parse HEAD)" = "$REVISION" ]] || fail "Downloaded checkout does not match $REVISION."
   (cd "$STAGE/checkout" && npm ci --ignore-scripts --no-audit --no-fund)
+  node "$STAGE/checkout/codey/hydrate-model-data.mjs"
   check_cli "$STAGE/checkout"
   mv "$STAGE/checkout" "$CHECKOUT"
 fi

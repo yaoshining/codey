@@ -6,7 +6,9 @@ Pi's `.pi` configuration, credentials, extensions, sessions, help text and inter
 
 ## Install a reviewed commit
 
-Requirements: macOS or Linux, Git, npm and Node.js **22.19 or newer**. The installer does not install Node or require sudo. It installs this checkout from GitHub, using its existing lockfile with `npm ci --ignore-scripts`. It runs from source, so no build or npm publication is required.
+Requirements: macOS or Linux, Git, curl, tar, npm and Node.js **22.19 or newer**. The installer does not install Node or require sudo. It installs this checkout from GitHub, using its existing lockfile with `npm ci --ignore-scripts`. It runs from source, so no build or npm publication is required.
+
+Pi's source runtime also needs gitignored model JSON. Codey restores only that metadata from the official `pi-ai` 1.6.0 npm archive, pinned by SHA512 in `model-data.json`, then validates it with Pi's existing validator. It does not run the archive's code, install a registry CLI, regenerate source or contact model providers. The pinned data is byte-identical to the development environment's existing provider JSON. When upstream bumps `pi-ai`, this Codey pin must be updated and verified for the new version.
 
 Replace `FULL_COMMIT_SHA` below with the reviewed 40-character commit. Use the same value in both places:
 
@@ -40,6 +42,7 @@ To uninstall, remove the `~/.local/bin/codey` symlink and the Codey checkout dir
 
 ```bash
 npm ci --ignore-scripts
+node codey/hydrate-model-data.mjs
 ./codey/bin/codey --version
 PI_OFFLINE=1 ./codey/bin/codey --help
 node --test codey/test/*.test.mjs
