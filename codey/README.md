@@ -53,4 +53,6 @@ The wrapper uses the same source resolver as `pi-test.sh`, with a file URL so in
 
 Tests cover argument and stream forwarding, cwd, environment, exit status, process signals, symlinks, installation failures, repeat installation and shell PATH setup with temporary home directories. The runtime tests invoke `codey` from PATH and exercise the real CLI's version, help and read-only RPC (`get_state` and `get_messages`). They isolate configuration, enable offline mode and block socket connections; no prompt is sent. To test an installed copy, run `CODEY_TEST_BIN="$HOME/.local/bin/codey" node --test codey/test/runtime.test.mjs`.
 
+The repository-wide check may report the inherited Mistral fixture errors for `ministral-14b-latest`. Compare with the same upstream baseline and treat additional diagnostics as regressions.
+
 These tests run on the host platform; passing on Linux does not establish that the CLI was tested on macOS. The wrapper and installer use macOS-compatible Bash syntax and avoid GNU-only path tools.

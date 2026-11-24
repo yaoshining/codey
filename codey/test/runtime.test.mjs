@@ -13,14 +13,20 @@ const manifest = JSON.parse(readFileSync(join(root, "packages/coding-agent/packa
 
 function fixture(t) {
 	const dir = mkdtempSync(join(tmpdir(), "codey-runtime-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const attempts = join(dir, "network-attempts");
+	t.after(() => {
+		try {
+			assert.equal(existsSync(attempts), false, "CLI attempted a network connection");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	const home = join(dir, "home");
 	const agent = join(dir, "agent");
 	const cwd = join(dir, "project with spaces");
 	const bin = join(dir, "bin");
 	for (const path of [home, agent, cwd, bin]) mkdirSync(path);
 	symlinkSync(resolve(executable), join(bin, "codey"));
-	const attempts = join(dir, "network-attempts");
 	const guard = join(dir, "no-network.mjs");
 	writeFileSync(
 		guard,
@@ -40,7 +46,6 @@ Socket.prototype.connect = function () {
 		PI_CODING_AGENT_DIR: agent,
 		NODE_OPTIONS: `--import=${pathToFileURL(guard).href}`,
 	};
-	t.after(() => assert.equal(existsSync(attempts), false, "CLI attempted a network connection"));
 	return { agent, env, cwd };
 }
 
