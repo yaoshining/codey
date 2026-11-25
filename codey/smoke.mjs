@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { codeyVersion } from "./version.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const temporary = mkdtempSync(join(realpathSync(tmpdir()), "codey-install-check-"));
@@ -96,6 +97,22 @@ Socket.prototype.connect = function () {
 		TERM: "dumb",
 		NODE_OPTIONS: `--import=${pathToFileURL(guard).href}`,
 	};
+	const codey = join(root, "codey/bin/codey");
+	const t3 = join(root, "codey/bin/codey-t3");
+	const pi = join(root, "pi-test.sh");
+	const piVersion = JSON.parse(readFileSync(join(root, "packages/coding-agent/package.json"), "utf8")).version;
+	for (const [entry, flag, expected] of [
+		[codey, "--version", codeyVersion],
+		[codey, "--codey-version", codeyVersion],
+		[codey, "--pi-version", piVersion],
+		[t3, "--version", piVersion],
+		[pi, "--version", piVersion],
+	]) {
+		const result = spawnSync(entry, [flag], { cwd, env, encoding: "utf8", timeout: 60_000 });
+		assert.ifError(result.error);
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout.trim(), expected, `${entry} ${flag} returned the wrong version`);
+	}
 	const requests = [
 		{ id: "state", type: "get_state" },
 		{ id: "messages", type: "get_messages" },
@@ -112,8 +129,9 @@ Socket.prototype.connect = function () {
 		"--no-context-files",
 	];
 	for (const [entry, provider] of [
-		[join(root, "codey/bin/codey"), "install-codey"],
-		[join(root, "pi-test.sh"), "install-pi"],
+		[codey, "install-codey"],
+		[t3, "install-codey"],
+		[pi, "install-pi"],
 	]) {
 		const result = spawnSync(entry, args, { cwd, env, input, encoding: "utf8", timeout: 60_000 });
 		assert.ifError(result.error);
@@ -132,9 +150,8 @@ Socket.prototype.connect = function () {
 		if (provider === "install-codey")
 			assert.equal(hashDirectory(oldAgent), before, "Codey wrote into the old Pi fixture");
 	}
-	const version = JSON.parse(readFileSync(join(root, "packages/coding-agent/package.json"), "utf8")).version;
 	console.log(
-		`Codey ${version} installation check passed: default Codey/Pi RPC models differ; old Pi fixture SHA256 ${before} unchanged by Codey.`,
+		`Codey ${codeyVersion} installation check passed: default Codey/Pi RPC models differ; old Pi fixture SHA256 ${before} unchanged by Codey.`,
 	);
 } finally {
 	try {

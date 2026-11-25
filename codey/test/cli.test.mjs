@@ -37,6 +37,8 @@ function fixture(t) {
 	mkdirSync(cwd);
 	copyFileSync(wrapper, join(bin, "codey"));
 	chmodSync(join(bin, "codey"), 0o755);
+	symlinkSync("codey", join(bin, "codey-t3"));
+	copyFileSync(join(repository, "codey/version.mjs"), join(source, "codey/version.mjs"));
 	copyFileSync(join(repository, "pi-test.sh"), join(source, "pi-test.sh"));
 	chmodSync(join(source, "pi-test.sh"), 0o755);
 	copyFileSync(join(repository, "codey/smoke.mjs"), join(source, "codey/smoke.mjs"));
@@ -60,8 +62,12 @@ if (process.env.CODEY_TEST_HYDRATE_FAIL === "1") {
 		`import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-if (process.argv.includes("--version")) {
+if (process.argv.includes("--pi-version") || (process.argv.includes("--version") && process.argv[1].endsWith("/cli.ts"))) {
 	console.log("1.6.0");
+	process.exit(0);
+}
+if (process.argv.includes("--version") || process.argv.includes("--codey-version")) {
+	console.log("0.1.0");
 	process.exit(0);
 }
 if (process.argv.includes("rpc")) {
@@ -203,7 +209,7 @@ test("entry resolves relative and absolute symlink chains in special-character p
 	const result = spawnSync(join(links, "codey"), ["--version"], { cwd, encoding: "utf8" });
 	assert.ifError(result.error);
 	assert.equal(result.status, 0, result.stderr);
-	assert.equal(result.stdout, "1.6.0\n");
+	assert.equal(result.stdout, "0.1.0\n");
 });
 
 test("entry preserves upstream nonzero exit status", (t) => {
@@ -262,6 +268,11 @@ test("installer fetches the pinned revision, installs without lifecycle scripts 
 	assert.doesNotMatch(result.stdout + result.stderr, /Prepared Pi model metadata|installation check passed|SHA256/);
 	assert.match(result.stderr, /npm warn fixture dependency warning/);
 	assert.equal(readlinkSync(join(binDir, "codey")), join(installDir, revision, "codey/bin/codey"));
+	assert.equal(readlinkSync(join(binDir, "codey-t3")), "codey");
+	const t3Probe = spawnSync(join(binDir, "codey-t3"), ["--version"], { cwd, env: environment, encoding: "utf8" });
+	assert.ifError(t3Probe.error);
+	assert.equal(t3Probe.status, 0, t3Probe.stderr);
+	assert.equal(t3Probe.stdout, "1.6.0\n");
 	assert.equal(readFileSync(join(installDir, revision, "hydrated"), "utf8"), "fixture hydrated\n");
 	assert.equal(readFileSync(join(binDir, "pi"), "utf8"), "existing Pi executable\n");
 	const calls = commands();
@@ -290,7 +301,7 @@ test("installer fetches the pinned revision, installs without lifecycle scripts 
 	});
 	assert.ifError(zsh.error);
 	assert.equal(zsh.status, 0, zsh.stderr);
-	assert.equal(zsh.stdout, `${join(binDir, "codey")}\n1.6.0\n`);
+	assert.equal(zsh.stdout, `${join(binDir, "codey")}\n0.1.0\n`);
 });
 
 test("reinstalling a verified revision does not fetch, reinstall or duplicate shell configuration", (t) => {
@@ -345,7 +356,7 @@ test("failed dependency installation preserves the prior working entry and remov
 	assert.deepEqual(readdirSync(installDir), [revision]);
 	const version = spawnSync(join(binDir, "codey"), ["--version"], { cwd, env: environment, encoding: "utf8" });
 	assert.equal(version.status, 0, version.stderr);
-	assert.equal(version.stdout, "1.6.0\n");
+	assert.equal(version.stdout, "0.1.0\n");
 });
 
 test("installer refuses an unrelated command before fetching or running npm", (t) => {
@@ -356,6 +367,16 @@ test("installer refuses an unrelated command before fetching or running npm", (t
 	assert.notEqual(result.status, 0);
 	assert.match(result.stderr, /Refusing to overwrite/);
 	assert.equal(readFileSync(entry, "utf8"), "keep this command\n");
+	assert.deepEqual(commands(), []);
+});
+
+test("installer refuses to overwrite an unrelated T3 entry", (t) => {
+	const { run, commands, binDir } = installFixture(t);
+	const entry = join(binDir, "codey-t3");
+	writeFileSync(entry, "another command");
+	assert.notEqual(run().status, 0);
+	assert.equal(readFileSync(entry, "utf8"), "another command");
+	assert.equal(existsSync(join(binDir, "codey")), false);
 	assert.deepEqual(commands(), []);
 });
 
@@ -410,6 +431,6 @@ test("Bash installation updates its active login profile and interactive rc", (t
 		);
 		assert.ifError(bash.error);
 		assert.equal(bash.status, 0, bash.stderr);
-		assert.equal(bash.stdout, `${join(binDir, "codey")}\n1.6.0\n`);
+		assert.equal(bash.stdout, `${join(binDir, "codey")}\n0.1.0\n`);
 	}
 });

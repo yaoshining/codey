@@ -2,6 +2,11 @@
 # Run Pi with Codey's user directory and help display, keeping Pi's runtime identity.
 set -euo pipefail
 
+# The explicit T3 alias uses Pi's version for T3's standalone compatibility probe.
+if [[ "${0##*/}" == codey-t3 && "$#" -eq 1 && "$1" == --version ]]; then
+  set -- --pi-version
+fi
+
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "$SOURCE" ]]; do
   SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"

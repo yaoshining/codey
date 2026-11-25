@@ -41,7 +41,7 @@ Replace `FULL_COMMIT_SHA` below with the reviewed 40-character commit. Use the s
 
 The final `export` enables the command in the current terminal. The installer adds the same PATH entry to zsh's `${ZDOTDIR:-$HOME}/.zshrc`, or Bash's `.bashrc` and first active login profile. Other shells receive a PATH instruction. Existing file contents are preserved, and rerunning the same installation does not duplicate the PATH entry.
 
-The installer places an isolated checkout at `~/.local/share/codey/<commit>` and a symlink at `~/.local/bin/codey`. Before replacing the link, it runs `codey/smoke.mjs` with a temporary HOME containing distinct fake Pi and Codey models. Read-only RPC must select Codey's new model and stock Pi's old model; a SHA256 comparison checks that default Codey did not write the old fixture. The check uses offline mode, blocks sockets and sends no prompt. It does not inherit your real directory overrides or credentials.
+The installer places an isolated checkout at `~/.local/share/codey/<commit>` and creates `codey` and `codey-t3` symlinks in `~/.local/bin`. Before updating the links, it runs `codey/smoke.mjs` with a temporary HOME containing distinct fake Pi and Codey models. It checks version output and verifies that read-only RPC selects the Codey model through either Codey entry and the Pi model through stock Pi. A SHA-256 comparison checks that the Codey entries leave the Pi fixture untouched. The check uses offline mode, blocks sockets and sends no prompt.
 
 The installer reuses an already installed revision and refuses to overwrite an unrelated command. Installation downloads npm dependencies but does not call a model provider or change Pi globally.
 
@@ -59,9 +59,15 @@ cd /path/to/project
 codey
 ```
 
-All Pi options remain available. Run `codey --help` for usage or `codey --codey-version` for the Codey version shown in the terminal. `codey --version` reports the underlying Pi version for RPC clients such as T3 Code, whose compatibility check uses it. Updating Codey means rerunning the installer with a new reviewed commit. Pi's inherited `update` command is not a Codey checkout updater. Prior checkouts remain available for rollback by rerunning the installer with their commit. Project-local `.pi` paths and the MCP OAuth identity remain compatible with Pi. `/bug` still reports to the upstream Pi project, and Pi runtime release notices refer to upstream releases.
+All Pi options remain available. Run `codey --help` for usage. `codey --version` and its compatibility alias `codey --codey-version` report the Codey version shown in the terminal. `codey --pi-version` reports the underlying Pi runtime version. Updating Codey means rerunning the installer with a new reviewed commit. Pi's inherited `update` command is not a Codey checkout updater. Prior checkouts remain available for rollback by rerunning the installer with their commit. Project-local `.pi` paths and the MCP OAuth identity remain compatible with Pi. `/bug` still reports to the upstream Pi project, and Pi runtime release notices refer to upstream releases.
 
-To uninstall, remove the `~/.local/bin/codey` symlink and the Codey checkout directory, then remove the `# Codey CLI path` line and following export from the shell startup files. Pi's settings and any separately installed `pi` are unaffected.
+To uninstall, remove the `~/.local/bin/codey` and `~/.local/bin/codey-t3` symlinks and the Codey checkout directory, then remove the `# Codey CLI path` line and following export from the shell startup files. Pi's settings and any separately installed `pi` are unaffected.
+
+## T3 Code v0.1.11
+
+In the T3 Code Pi provider settings for your Codey instance, set **Binary path** to the absolute path of the installed `codey-t3` entry, normally `$HOME/.local/bin/codey-t3` on the machine running the T3 server. Use your custom binary directory if you set `CODEY_BIN_DIR`. Refresh the provider after saving.
+
+T3 v0.1.11 probes its configured binary with `--version` and rejects versions below Pi 0.84.3 before RPC discovery. The `codey-t3` entry answers that standalone probe with the actual Pi runtime version and forwards normal calls to Codey, using the same settings, sessions, and extensions. The installer adds both entries to the same directory.
 
 ## Run and verify from a checkout
 
@@ -69,6 +75,7 @@ To uninstall, remove the `~/.local/bin/codey` symlink and the Codey checkout dir
 npm ci --ignore-scripts
 node codey/hydrate-model-data.mjs
 ./codey/bin/codey --version
+./codey/bin/codey --pi-version
 PI_OFFLINE=1 ./codey/bin/codey --help
 node --test codey/test/*.test.mjs
 npm run check

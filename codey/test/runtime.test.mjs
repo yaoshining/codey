@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { codeyVersion } from "../version.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const executable = process.env.CODEY_TEST_BIN ?? join(root, "codey/bin/codey");
@@ -177,11 +178,14 @@ function assertModel(state, expected) {
 	assert.equal(state.model.id, expected.model);
 }
 
-test("codey keeps the upstream version and source resources", (t) => {
+test("Codey separates its own version from the Pi runtime version and keeps source resources", (t) => {
 	const context = fixture(t);
-	assert.equal(run(context, ["--version"]).stdout.trim(), manifest.version);
+	assert.equal(run(context, ["--version"]).stdout.trim(), codeyVersion);
+	assert.equal(run(context, ["-v"]).stdout.trim(), codeyVersion);
+	assert.equal(run(context, ["--offline", "--version"]).stdout.trim(), codeyVersion);
+	assert.equal(run(context, ["--pi-version"]).stdout.trim(), manifest.version);
 	assert.equal(run(context, ["--version"], { command: "pi" }).stdout.trim(), manifest.version);
-	assert.equal(run(context, ["--codey-version"]).stdout.trim(), "0.1.0");
+	assert.equal(run(context, ["--codey-version"]).stdout.trim(), codeyVersion);
 	const data = seed(context, "codey", context.agent);
 	const state = rpc(context);
 	assertModel(state.state, data);
@@ -238,6 +242,7 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	assert.match(help, /enter \/quit to exit/);
 	assert.doesNotMatch(help, /\/exit\b/);
 	assert.match(help, /--codey-version/);
+	assert.match(help, /--pi-version/);
 	assert.ok(help.includes(context.agent));
 	const exportPath = join(context.agent, "sessions/--path--/session.jsonl");
 	assert.ok(help.includes("'" + exportPath.replaceAll("'", "'\\''") + "'"), "export path must be shell quoted");
@@ -253,7 +258,7 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	assert.ok(original.includes("Config directory (default: ~/.pi/agent)"));
 	assert.ok(original.includes("pi --export ~/.pi/agent/sessions/--path--/session.jsonl"));
 	assert.doesNotMatch(original, /codey -|  codey /);
-	assert.doesNotMatch(original, /--codey-version/);
+	assert.doesNotMatch(original, /--(?:codey|pi)-version/);
 	for (const command of ["install", "remove", "list", "config", "update", "mcp"]) {
 		const usage = new RegExp(`^  codey ${command}\\b`, "m");
 		assert.match(run(context, [command, "--help"]).stdout, usage);
