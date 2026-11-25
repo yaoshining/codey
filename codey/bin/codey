@@ -15,6 +15,12 @@ while [[ -L "$SOURCE" ]]; do
 done
 REPO_DIR="$(cd -P "$(dirname "$SOURCE")/../.." && pwd)"
 
+if [[ "${1:-}" == sandbox ]]; then
+  shift
+  unset NODE_OPTIONS NODE_PATH
+  exec node "$REPO_DIR/codey/sandbox.mjs" "$@"
+fi
+
 # Explicit Codey overrides win; existing Pi overrides remain opt-in shared state.
 export PI_CODING_AGENT_DIR="${CODEY_CODING_AGENT_DIR:-${PI_CODING_AGENT_DIR:-$HOME/.codey/agent}}"
 if [[ -n "${CODEY_CODING_AGENT_SESSION_DIR:-}" ]]; then

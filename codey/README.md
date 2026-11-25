@@ -111,6 +111,10 @@ The new checkout starts with committed files from the selected base. Your origin
 
 Commit your task changes before running `/review main` to review the branch. Checkouts remain when you quit or if startup fails. Deletion uses the ID from the repository's managed list and keeps the branch. Codey refuses to delete the current checkout from its root or a child directory and keeps checkouts with changes or untracked files, including ignored files. Worktrees isolate checkouts and share your filesystem permissions.
 
+## Run an offline Docker sandbox
+
+Use `codey sandbox` to start an isolated Codey terminal from a selected Git commit. See the [offline sandbox guide](sandbox/README.md) for the image build, dry run, retained results and integration check.
+
 ## Review changes
 
 In an interactive Codey session, run `/review` to review the repository's staged, unstaged and untracked changes. Run `/review main` or `/review origin/main` to review only committed changes from the merge base with that local or remote-tracking branch to HEAD. Staged, unstaged and untracked changes are excluded in branch mode. Codey uses the refs already on disk.
