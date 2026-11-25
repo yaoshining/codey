@@ -11,13 +11,20 @@
   (sysctl-name "kern.ostype")
   (sysctl-name "kern.osversion")
   (sysctl-name "kern.version")
+  (sysctl-name-prefix "kern.proc.pid.")
   (sysctl-name "kern.maxfilesperproc"))
 (allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
 (allow file-read-metadata
   (path-ancestors (param "WORKSPACE"))
   (path-ancestors (param "SCRATCH"))
   (path-ancestors (param "INSTALL"))
-  (path-ancestors (param "NODE")))
+  (path-ancestors (param "NODE"))
+  (literal "/")
+  (literal "/System/Volumes")
+  (literal "/System/Volumes/Data")
+  (literal "/System/Volumes/Data/Users")
+  (literal "/dev")
+  (literal "/dev/fd"))
 (allow file-read* file-map-executable
   (subpath "/System/Library")
   (subpath "/usr/lib")
@@ -39,6 +46,9 @@
   (literal "/private/etc/localtime")
   (subpath "/private/var/db/timezone"))
 (allow file-write-data (literal "/dev/null"))
+; Only the three inherited pipes are accessible through their descriptor paths.
+(allow file-read* (literal "/dev/fd/0") (literal "/dev/fd/1") (literal "/dev/fd/2"))
+(allow file-write-data (literal "/dev/fd/1") (literal "/dev/fd/2"))
 (allow file-read* file-write* (subpath (param "WORKSPACE")) (subpath (param "SCRATCH")))
 ; These names stay protected even inside the selected workspace. Explicit
 ; character classes preserve the restriction on case-insensitive volumes.
