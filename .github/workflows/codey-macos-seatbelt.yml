@@ -1,0 +1,40 @@
+name: Verify Codey macOS Seatbelt
+
+on:
+  push:
+    branches: [verify/codey-macos-seatbelt]
+    paths: [.github/workflows/codey-macos-seatbelt.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - name: Check out fixed Codey candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: b82dbaa609dce61e05dace1441598a624d7dcde7
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.22.3"
+          package-manager-cache: false
+      - name: Install public test and repository dependencies
+        run: |
+          sw_vers
+          uname -m
+          git rev-parse HEAD
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+      - name: Exercise real macOS Seatbelt with a synthetic project and model
+        run: |
+          node --test codey/test/macos-sandbox.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/integration.py ./codey/bin/codey
+          ./codey/bin/codey --version
+          ./codey/bin/codey sandbox --help
