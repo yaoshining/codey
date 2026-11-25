@@ -89,6 +89,20 @@ The repository-wide check may report the inherited Mistral fixture errors for `m
 
 These tests run on the host platform; passing on Linux does not establish that the CLI was tested on macOS. The wrapper and installer use macOS-compatible Bash syntax and avoid GNU-only path tools.
 
+## Start a task in a Git worktree
+
+From a Git checkout, run:
+
+```bash
+codey worktree fix-tests --base main
+```
+
+This creates branch `codey/fix-tests` and opens a fresh terminal session at the new checkout root. The default base is the current `HEAD`. The default destination is a sibling directory named `<current-checkout>-<task>`. Use `--path <directory>` to choose a different new path with an existing parent. Relative paths are resolved from your current directory. Run `codey worktree --help` for the options.
+
+The new checkout starts with committed files from the selected base. Your original index, uncommitted files and sessions stay in place. Git shares refs and objects across worktrees. The command skips Git checkout hooks and submodule initialization. Codey loads project settings from the new checkout under its normal trust rules.
+
+Commit your task changes before running `/review main` to review the branch. The worktree and branch remain when you quit or if startup fails. Run `git worktree list` to find your checkout, then enter its directory and run `codey` to open another session there. Worktrees isolate checkouts. They share your filesystem permissions.
+
 ## Review changes
 
 In an interactive Codey session, run `/review` to review the repository's staged, unstaged and untracked changes. Run `/review main` or `/review origin/main` to review only committed changes from the merge base with that local or remote-tracking branch to HEAD. Staged, unstaged and untracked changes are excluded in branch mode. Codey uses the refs already on disk.
