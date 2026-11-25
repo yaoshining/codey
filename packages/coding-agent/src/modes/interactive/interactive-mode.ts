@@ -447,6 +447,7 @@ export interface InteractiveModeOptions {
 		title: string;
 		version: string;
 		logoLines: (mode: ReturnType<typeof theme.getColorMode>) => readonly string[];
+		projectTrustDescription?: string;
 	};
 	/** Providers that were migrated to auth.json (shows warning) */
 	migratedProviders?: string[];

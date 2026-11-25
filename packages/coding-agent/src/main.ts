@@ -618,6 +618,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
 	const branding = options?.branding;
 	const commandName = branding?.commandName;
+	const projectTrustDescription = branding?.projectTrustDescription;
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
@@ -650,7 +651,7 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (await handlePackageCommand(args, { extensionFactories, commandName })) {
+	if (await handlePackageCommand(args, { extensionFactories, commandName, projectTrustDescription })) {
 		const exitCode = process.exitCode ?? 0;
 		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
 			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
@@ -663,7 +664,7 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	if (await handleConfigCommand(args, { extensionFactories, commandName })) {
+	if (await handleConfigCommand(args, { extensionFactories, commandName, projectTrustDescription })) {
 		return;
 	}
 
@@ -835,6 +836,7 @@ export async function main(args: string[], options?: MainOptions) {
 								cwd,
 								trustStore,
 								commandName,
+								projectTrustDescription,
 								trustOverride: parsed.projectTrustOverride,
 								defaultProjectTrust: startupSettingsManager.getDefaultProjectTrust(),
 								extensionsResult,

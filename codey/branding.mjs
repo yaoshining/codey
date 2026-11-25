@@ -52,4 +52,6 @@ export const branding = {
 	title: "Codey",
 	version: codeyVersion,
 	logoLines,
+	projectTrustDescription:
+		"This allows Codey to load project settings and resources, install missing project packages, and execute project extensions.",
 };
