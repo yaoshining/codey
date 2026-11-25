@@ -19,6 +19,7 @@ INSTALL_DIR="$(cd -P "$INSTALL_DIR" && pwd)"
 BIN_DIR="$(cd -P "$BIN_DIR" && pwd)"
 CHECKOUT="$INSTALL_DIR/$REVISION"
 ENTRY="$BIN_DIR/codey"
+T3_ENTRY="$BIN_DIR/codey-t3"
 
 # Only replace links created for a Codey checkout in this installation directory.
 if [[ -e "$ENTRY" || -L "$ENTRY" ]]; then
@@ -27,6 +28,11 @@ if [[ -e "$ENTRY" || -L "$ENTRY" ]]; then
   OLD_REVISION="${OLD_TARGET#"$INSTALL_DIR"/}"
   OLD_REVISION="${OLD_REVISION%/codey/bin/codey}"
   [[ "$OLD_REVISION" =~ ^[0-9a-f]{40}$ && "$OLD_TARGET" = "$INSTALL_DIR/$OLD_REVISION/codey/bin/codey" ]] || fail "Refusing to replace an unrelated link at $ENTRY."
+fi
+
+# The relative T3 alias follows the same checked-out revision whenever Codey is updated.
+if [[ -e "$T3_ENTRY" || -L "$T3_ENTRY" ]]; then
+  [[ -L "$T3_ENTRY" && "$(readlink "$T3_ENTRY")" == codey ]] || fail "Refusing to overwrite $T3_ENTRY; choose another CODEY_BIN_DIR."
 fi
 
 STAGE="$(mktemp -d "$INSTALL_DIR/.install.XXXXXX")"
@@ -59,6 +65,9 @@ else
 fi
 
 ln -s "$CHECKOUT/codey/bin/codey" "$STAGE/codey"
+if [[ ! -L "$T3_ENTRY" ]]; then
+  ln -s codey "$T3_ENTRY"
+fi
 mv -f "$STAGE/codey" "$ENTRY"
 
 # zsh is the default macOS shell. Bash login and interactive shells read different files.

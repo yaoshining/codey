@@ -1,5 +1,6 @@
 // Terminal adaptation of docs/assets/codey-mark.svg.
 import { backgroundAnsi, foregroundAnsi, rgbColor } from "@earendil-works/pi-tui";
+import { codeyVersion } from "./version.mjs";
 
 const pixels = [
 	" ...... ",
@@ -44,6 +45,6 @@ function logoLines(mode) {
 export const branding = {
 	commandName: "codey",
 	title: "Codey",
-	version: "0.1.0",
+	version: codeyVersion,
 	logoLines,
 };

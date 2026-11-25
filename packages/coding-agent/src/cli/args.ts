@@ -358,7 +358,7 @@ ${chalk.bold("Options:")}
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)
   --                             End option parsing; treat remaining arguments as messages/files
   --help, -h                     Show this help
-  --version, -v                  ${codeyHelp ? "Show Pi runtime version for compatibility" : "Show version number"}${codeyHelp ? "\n  --codey-version               Show Codey version (standalone)" : ""}
+  --version, -v                  ${codeyHelp ? "Show Codey version" : "Show version number"}${codeyHelp ? "\n  --codey-version               Alias for --version (standalone)\n  --pi-version                  Show underlying Pi runtime version (standalone)" : ""}
 
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 

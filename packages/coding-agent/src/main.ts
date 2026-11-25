@@ -686,7 +686,7 @@ export async function main(args: string[], options?: MainOptions) {
 	time("parseArgs");
 
 	if (parsed.version) {
-		console.log(VERSION);
+		console.log(branding?.version ?? VERSION);
 		process.exit(0);
 	}
 
