@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: b82dbaa609dce61e05dace1441598a624d7dcde7
+          ref: 01624c83f28e3d86aba87aaa524097e9bbdabde6
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -38,3 +38,7 @@ jobs:
           "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/integration.py ./codey/bin/codey
           ./codey/bin/codey --version
           ./codey/bin/codey sandbox --help
+      - name: Read Seatbelt diagnostics if the check failed
+        if: failure()
+        run: |
+          /usr/bin/log show --last 3m --style compact --predicate 'eventMessage CONTAINS[c] "sandbox" AND (eventMessage CONTAINS[c] "node" OR eventMessage CONTAINS[c] "codey-sandbox")' | tail -n 80
