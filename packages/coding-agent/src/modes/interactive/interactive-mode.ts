@@ -1117,20 +1117,17 @@ export class InteractiveMode {
 		// Add header with keybindings from config (unless silenced)
 		if (this.shouldShowStartupHeader()) {
 			const showDetails = this.shouldShowStartupDetails();
-			// Built on demand so the header follows theme changes. The logo's first line carries the version,
-			// its second line the first line of key hints. Terminals that cannot render the logo get a
-			// "Pi vX" line instead, with the key hints below it.
+			// Build on demand so the header follows theme changes. Terminals that cannot render half blocks
+			// get a text label with the key hints below it.
 			const showLogo = supportsPiLogo();
 			const branding = this.options.branding;
 			const withLogo = (hints: string) => {
 				if (branding) {
 					const label = `${theme.fg("accent", branding.title)} ${theme.fg("dim", `v${branding.version}`)}`;
 					const lines = showLogo ? branding.logoLines(theme.getColorMode()) : [];
-					return [
-						...lines.map((line, index) => (index === 0 ? `${line} ${label}` : line)),
-						...(lines.length ? [] : [label]),
-						hints,
-					].join("\n");
+					if (!lines.length) return `${label}\n${hints}`;
+					const middle = Math.floor((lines.length - 1) / 2);
+					return [...lines.map((line, index) => (index === middle ? `${line} ${label}` : line)), hints].join("\n");
 				}
 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
 				const [top, bottom] = piLogoLines();
@@ -1139,6 +1136,7 @@ export class InteractiveMode {
 
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
+			const quitHint = () => rawKeyHint("/quit", "to exit");
 
 			const expandedInstructions = () =>
 				[
@@ -1146,6 +1144,7 @@ export class InteractiveMode {
 					hint("app.clear", "to clear"),
 					rawKeyHint(`${keyText("app.clear")} twice`, "to exit"),
 					hint("app.exit", "to exit (empty)"),
+					...(branding ? [quitHint()] : []),
 					hint("app.suspend", "to suspend"),
 					keyHint("tui.editor.deleteToLineEnd", "to delete to end"),
 					hint("app.thinking.cycle", "to cycle thinking level"),
@@ -1168,7 +1167,9 @@ export class InteractiveMode {
 			const compactInstructions = () =>
 				[
 					hint("app.interrupt", "interrupt"),
-					rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
+					...(branding
+						? [hint("app.clear", "clear"), quitHint()]
+						: [rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit")]),
 					rawKeyHint("/", "commands"),
 					rawKeyHint("!", "bash"),
 					hint("app.tools.expand", "more"),
