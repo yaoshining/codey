@@ -105,25 +105,38 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 			for await (const line of lines) {
 				output.push(line);
 				const event = JSON.parse(line);
-				if (event.type === "response" && event.id === "test") break;
+				if (event.type === "response" && event.id === "test") {
+					if (request.type !== "prompt") break;
+					child.stdin.write(JSON.stringify({ id: "history", type: "get_messages" }) + "\n");
+				}
+				if (event.type === "response" && event.id === "history") {
+					assert.deepEqual(event.data?.messages, []);
+					break;
+				}
 			}
 		} finally {
 			child.stdin.end();
 			const [status] = await closed;
 			assert.equal(status, 0, stderr);
 		}
-		assert.ok(output.some((line) => JSON.parse(line).id === "test"), stderr);
+		assert.ok(output.some((line) => JSON.parse(line).id === (request.type === "prompt" ? "history" : "test")), stderr);
 		return output.join("\n");
 	};
 	assert.match(await rpc({ type: "get_commands" }), /"name":"review"/);
 	assert.doesNotMatch(await rpc({ type: "get_commands" }, ["--no-extensions"]), /"name":"review"/);
-	const reviewEntries = (output) =>
-		output
+	const reviewNotifications = (output) => {
+		const events = output
 			.trim()
 			.split("\n")
-			.map((line) => JSON.parse(line))
-			.filter(({ type, entry }) => type === "entry_appended" && entry.customType === "codey-review")
-			.map(({ entry }) => entry.data);
+			.map((line) => JSON.parse(line));
+		assert.ok(!events.some(({ type, entry }) => type === "entry_appended" && entry.customType === "codey-review"));
+		return events
+			.filter(({ type, method }) => type === "extension_ui_request" && method === "notify")
+			.map(({ message, notifyType }) => {
+				assert.equal(notifyType, "info");
+				return message;
+			});
+	};
 	for (const [command, includesCommitted] of [
 		["/review", false],
 		["/review main", true],
@@ -138,10 +151,10 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 		const output = await rpc({ type: "prompt", message: command });
 		assert.deepEqual(snapshot(), beforeReview);
 		const scope = includesCommitted ? "commits since merge base with main" : "current changes";
-		assert.deepEqual(reviewEntries(output), [
-			{ phase: "started", text: `>> Code review started: ${scope} <` },
-			{ phase: "report", text: "P2 tracked.txt:1 Fixture finding" },
-			{ phase: "finished", text: "<< Code review finished >>" },
+		assert.deepEqual(reviewNotifications(output), [
+			`>> Code review started: ${scope} <`,
+			"P2 tracked.txt:1 Fixture finding",
+			"<< Code review finished >>",
 		]);
 		assert.doesNotMatch(output, /"type":"message_end"/);
 		assert.match(output, /"disposition":"handled"/);
@@ -165,12 +178,16 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 		assert.doesNotMatch(content, /DO_NOT_SEND_THIS/);
 	}
 	rmSync(log);
-	const invalid = reviewEntries(await rpc({ type: "prompt", message: "/review missing-base" }));
-	assert.deepEqual(invalid.map(({ phase }) => phase), ["started", "report", "finished"]);
-	assert.match(invalid[1].text, /No local or remote-tracking branch/);
-	const oversized = reviewEntries(await rpc({ type: "prompt", message: "/review" }));
-	assert.deepEqual(oversized.map(({ phase }) => phase), ["started", "report", "finished"]);
-	assert.match(oversized[1].text, /64 KiB review limit/);
+	for (const [command, scope, error] of [
+		["/review missing-base", "commits since merge base with missing-base", /No local or remote-tracking branch/],
+		["/review", "current changes", /64 KiB review limit/],
+	]) {
+		const notifications = reviewNotifications(await rpc({ type: "prompt", message: command }));
+		assert.equal(notifications.length, 3);
+		assert.equal(notifications[0], `>> Code review started: ${scope} <`);
+		assert.match(notifications[1], error);
+		assert.equal(notifications[2], "<< Code review finished >>");
+	}
 	const bypass = await rpc({ type: "prompt", message: "/review\tmain" });
 	assert.match(bypass, /Submit \/review \[base-branch\] as a slash command/);
 	assert.match(bypass, /"disposition":"handled"/);

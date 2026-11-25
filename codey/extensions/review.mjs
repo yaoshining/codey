@@ -127,9 +127,6 @@ export default function review(pi) {
 		const text = stripVTControlCharacters(entry.data.text);
 		return new Text(entry.data.phase === "report" ? text : theme.bold(text), 1, 1);
 	});
-	function append(phase, text) {
-		pi.appendEntry(reviewEntry, { phase, text: stripVTControlCharacters(text) });
-	}
 	pi.on("session_shutdown", () => reviewController?.abort());
 	// If a client forwards a literal review command as ordinary input, keep it out of the tool-enabled turn.
 	pi.on("input", (event, ctx) => {
@@ -148,9 +145,15 @@ export default function review(pi) {
 			reviewController = controller;
 			const base = args.trim();
 			const scope = base ? `commits since merge base with ${base}` : "current changes";
+			function publish(phase, text) {
+				const message = stripVTControlCharacters(text);
+				// T3's Pi RPC adapter displays notify events.
+				if (ctx.mode === "rpc") ctx.ui.notify(message, "info");
+				else pi.appendEntry(reviewEntry, { phase, text: message });
+			}
 			let stopListening;
 			try {
-				append("started", `>> Code review started: ${scope} <`);
+				publish("started", `>> Code review started: ${scope} <`);
 				if (ctx.mode === "tui") {
 					const keybindings = getKeybindings();
 					const interrupt = keybindings.getKeys("app.interrupt").join("/");
@@ -165,7 +168,7 @@ export default function review(pi) {
 				const { patches, skipped } = await collectDiff(ctx.cwd, base, controller.signal);
 				const scopeNote = skipped ? `\nSkipped ${skipped} non-regular untracked file(s).` : "";
 				if (!patches.length) {
-					append("report", `No changes to review.${scopeNote}`);
+					publish("report", `No changes to review.${scopeNote}`);
 					return;
 				}
 				if (process.env.PI_OFFLINE && /^(1|true|yes)$/i.test(process.env.PI_OFFLINE)) {
@@ -192,9 +195,9 @@ export default function review(pi) {
 					.join("\n")
 					.trim();
 				const incomplete = response.stopReason === "length" ? "\nThe model reached its output limit." : "";
-				append("report", `${content || "The model returned no review text."}${incomplete}${scopeNote}`);
+				publish("report", `${content || "The model returned no review text."}${incomplete}${scopeNote}`);
 			} catch (error) {
-				append(
+				publish(
 					"report",
 					controller.signal.aborted
 						? "Code review canceled."
@@ -206,7 +209,7 @@ export default function review(pi) {
 					stopListening();
 					ctx.ui.setStatus(reviewEntry, undefined);
 				}
-				append("finished", "<< Code review finished >>");
+				publish("finished", "<< Code review finished >>");
 			}
 		},
 	});
