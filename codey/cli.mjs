@@ -4,6 +4,7 @@ import { VERSION } from "../packages/coding-agent/src/config.ts";
 import { main } from "../packages/coding-agent/src/main.ts";
 import { branding } from "./branding.mjs";
 import review from "./extensions/review.mjs";
+import worktree from "./extensions/worktree.mjs";
 import { runWorktree } from "./worktree.mjs";
 
 const args = process.argv.slice(2);
@@ -21,6 +22,9 @@ async function launch(args) {
 	setupCli();
 	await main(args, {
 		branding,
-		extensionFactories: [{ name: "codey-review", factory: review, builtin: true, replaceable: true }],
+		extensionFactories: [
+			{ name: "codey-review", factory: review, builtin: true, replaceable: true },
+			{ name: "codey-worktree", factory: worktree, builtin: true, replaceable: true },
+		],
 	});
 }
