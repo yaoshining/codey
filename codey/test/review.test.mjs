@@ -152,7 +152,7 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 		assert.deepEqual(snapshot(), beforeReview);
 		const scope = includesCommitted ? "commits since merge base with main" : "current changes";
 		assert.deepEqual(reviewNotifications(output), [
-			`>> Code review started: ${scope} <`,
+			`>> Code review started: ${scope} <<`,
 			"P2 tracked.txt:1 Fixture finding",
 			"<< Code review finished >>",
 		]);
@@ -184,7 +184,7 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 	]) {
 		const notifications = reviewNotifications(await rpc({ type: "prompt", message: command }));
 		assert.equal(notifications.length, 3);
-		assert.equal(notifications[0], `>> Code review started: ${scope} <`);
+		assert.equal(notifications[0], `>> Code review started: ${scope} <<`);
 		assert.match(notifications[1], error);
 		assert.equal(notifications[2], "<< Code review finished >>");
 	}

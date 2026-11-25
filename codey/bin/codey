@@ -15,8 +15,6 @@ export PI_CODING_AGENT_DIR="${CODEY_CODING_AGENT_DIR:-${PI_CODING_AGENT_DIR:-$HO
 if [[ -n "${CODEY_CODING_AGENT_SESSION_DIR:-}" ]]; then
   export PI_CODING_AGENT_SESSION_DIR="$CODEY_CODING_AGENT_SESSION_DIR"
 fi
-# Only the two help printers read this marker; it does not change APP_NAME or OAuth.
-export CODEY_CLI_HELP=1
 
 # --import needs a file URL when the checkout path contains #, ? or %.
 RESOLVER_URL="$(node -p 'require("node:url").pathToFileURL(process.argv[1]).href' "$REPO_DIR/packages/coding-agent/src/experimental/source-resolver.ts")"

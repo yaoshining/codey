@@ -180,6 +180,8 @@ function assertModel(state, expected) {
 test("codey keeps the upstream version and source resources", (t) => {
 	const context = fixture(t);
 	assert.equal(run(context, ["--version"]).stdout.trim(), manifest.version);
+	assert.equal(run(context, ["--version"], { command: "pi" }).stdout.trim(), manifest.version);
+	assert.equal(run(context, ["--codey-version"]).stdout.trim(), "0.1.0");
 	const data = seed(context, "codey", context.agent);
 	const state = rpc(context);
 	assertModel(state.state, data);
@@ -233,6 +235,7 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	const help = run(context, ["--help", ...noResources]).stdout;
 	assert.match(help, /^codey - AI coding assistant/m);
 	assert.match(help, /  codey \[options\]/);
+	assert.match(help, /--codey-version/);
 	assert.ok(help.includes(context.agent));
 	const exportPath = join(context.agent, "sessions/--path--/session.jsonl");
 	assert.ok(help.includes("'" + exportPath.replaceAll("'", "'\\''") + "'"), "export path must be shell quoted");
@@ -247,6 +250,12 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	assert.ok(original.includes("Config directory (default: ~/.pi/agent)"));
 	assert.ok(original.includes("pi --export ~/.pi/agent/sessions/--path--/session.jsonl"));
 	assert.doesNotMatch(original, /codey -|  codey /);
+	assert.doesNotMatch(original, /--codey-version/);
+	for (const command of ["install", "remove", "list", "config", "update", "mcp"]) {
+		const usage = new RegExp(`^  codey ${command}\\b`, "m");
+		assert.match(run(context, [command, "--help"]).stdout, usage);
+		assert.doesNotMatch(run(context, [command, "--help"], { command: "pi" }).stdout, usage);
+	}
 	const originalAuth = run(context, ["auth", "--help"], { command: "pi" }).stdout;
 	assert.match(originalAuth, /  pi auth login/);
 	assert.ok(originalAuth.includes("Credentials are stored in ~/.pi/agent/auth.json."));

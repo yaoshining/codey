@@ -31,16 +31,16 @@ import {
 	signInMcpServer,
 } from "./runtime.ts";
 
-const HELP = `${chalk.bold("Usage:")}
-  ${APP_NAME} mcp add <server> [options] -- <command> [args...]
-  ${APP_NAME} mcp add <server> [options] --url <url>
-  ${APP_NAME} mcp remove <server> [-l]
-  ${APP_NAME} mcp list [--json]
-  ${APP_NAME} mcp login <server> [-l] [--timeout <seconds>]
-  ${APP_NAME} mcp logout <server> [-l]
+const commandHelp = (commandName: string, globalConfig: string) => `${chalk.bold("Usage:")}
+  ${commandName} mcp add <server> [options] -- <command> [args...]
+  ${commandName} mcp add <server> [options] --url <url>
+  ${commandName} mcp remove <server> [-l]
+  ${commandName} mcp list [--json]
+  ${commandName} mcp login <server> [-l] [--timeout <seconds>]
+  ${commandName} mcp logout <server> [-l]
 
 Configure and check MCP servers and sign in to OAuth servers without starting a session.
-Reads ~/${CONFIG_DIR_NAME}/agent/mcp.json and, in trusted projects, ${CONFIG_DIR_NAME}/mcp.json.
+Reads ${globalConfig} and, in trusted projects, ${CONFIG_DIR_NAME}/mcp.json.
 
 Commands:
   add <server>            Add or replace a server in mcp.json
@@ -75,11 +75,12 @@ Other options:
   --json                  Print the list as JSON
   --timeout <seconds>     Time limit for the whole sign-in (default: 300)`;
 
-const HELP_HINT = chalk.dim(`Use "${APP_NAME} mcp --help" for usage.`);
+const helpHint = (commandName: string) => chalk.dim(`Use "${commandName} mcp --help" for usage.`);
 
 const DEFAULT_LOGIN_TIMEOUT_SECONDS = 300;
 
 export interface McpCommandOptions {
+	commandName?: string;
 	cwd: string;
 	agentDir: string;
 	/** Defaults to `mcp-auth.json` in the agent directory. */
@@ -184,6 +185,7 @@ function parseOptions(
 	args: string[],
 	known: Record<string, "flag" | "value" | "list">,
 	error: (line: string) => void,
+	commandName: string,
 	maxPositionals = Number.POSITIVE_INFINITY,
 ): ParsedOptions | undefined {
 	const positional: string[] = [];
@@ -203,7 +205,7 @@ function parseOptions(
 		const name = arg.slice(2);
 		const kind = known[name];
 		if (!kind) {
-			error(`Unknown option ${typed}.\n${HELP_HINT}`);
+			error(`Unknown option ${typed}.\n${helpHint(commandName)}`);
 			return undefined;
 		}
 		if (kind === "flag") {
@@ -226,8 +228,14 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 	const log = options.log ?? ((line: string) => console.log(line));
 	const error = options.error ?? ((line: string) => console.error(line));
 	const [command, ...rest] = args;
+	const commandName = options.commandName ?? APP_NAME;
 	if (command === undefined || command === "help" || args.includes("--help") || args.includes("-h")) {
-		log(HELP);
+		log(
+			commandHelp(
+				commandName,
+				options.commandName ? join(options.agentDir, "mcp.json") : `~/${CONFIG_DIR_NAME}/agent/mcp.json`,
+			),
+		);
 		return 0;
 	}
 
@@ -241,17 +249,17 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 	const loaded = loadMcpConfig({ agentDir: options.agentDir, cwd: options.cwd, projectTrusted });
 	const untrustedNote =
 		!projectTrusted && existsSync(projectConfig)
-			? `${projectConfig} is ignored because the project is not trusted. Start ${APP_NAME} in the project to trust it.`
+			? `${projectConfig} is ignored because the project is not trusted. Start ${commandName} in the project to trust it.`
 			: undefined;
 	const credentials = options.credentials ?? new McpOAuthCredentialStore();
 	const providerToken = options.providerToken ?? createProviderTokenReader(options.agentDir);
 
 	switch (command) {
 		case "list": {
-			const parsed = parseOptions(rest, { json: "flag" }, error);
+			const parsed = parseOptions(rest, { json: "flag" }, error, commandName);
 			if (!parsed) return 1;
 			if (parsed.positional.length > 0) {
-				error(`Usage: ${APP_NAME} mcp list [--json]\n${HELP_HINT}`);
+				error(`Usage: ${commandName} mcp list [--json]\n${helpHint(commandName)}`);
 				return 1;
 			}
 			return list(loaded, parsed.values.has("json"), untrustedNote, options, credentials, providerToken, log);
@@ -262,11 +270,12 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 				rest,
 				command === "login" ? { local: "flag", timeout: "value" } : { local: "flag" },
 				error,
+				commandName,
 			);
 			if (!parsed) return 1;
 			const [name, ...extra] = parsed.positional;
 			if (!name || extra.length > 0) {
-				error(`Usage: ${APP_NAME} mcp ${command} <server> [-l]\n${HELP_HINT}`);
+				error(`Usage: ${commandName} mcp ${command} <server> [-l]\n${helpHint(commandName)}`);
 				return 1;
 			}
 			const entry = loaded.servers.find((server) => server.name === name);
@@ -285,7 +294,7 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 			const authProvider = getAuthProvider(entry);
 			if (authProvider) {
 				error(
-					`MCP server "${name}" uses the credentials of provider "${authProvider}". Run "${APP_NAME} auth ${command} ${authProvider}".`,
+					`MCP server "${name}" uses the credentials of provider "${authProvider}". Run "${commandName} auth ${command} ${authProvider}".`,
 				);
 				return 1;
 			}
@@ -312,7 +321,7 @@ export async function runMcpCommand(args: string[], options: McpCommandOptions):
 			}
 		}
 		default:
-			error(`Unknown mcp command "${command}".\n${HELP_HINT}`);
+			error(`Unknown mcp command "${command}".\n${helpHint(commandName)}`);
 			return 1;
 	}
 }
@@ -352,7 +361,8 @@ function add(
 	log: (line: string) => void,
 	error: (line: string) => void,
 ): number {
-	const usage = `Usage: ${APP_NAME} mcp add <server> [options] (--url <url> | -- <command> [args...])\n${HELP_HINT}`;
+	const commandName = options.commandName ?? APP_NAME;
+	const usage = `Usage: ${commandName} mcp add <server> [options] (--url <url> | -- <command> [args...])\n${helpHint(commandName)}`;
 	const parsed = parseOptions(
 		args,
 		{
@@ -371,6 +381,7 @@ function add(
 			description: "value",
 		},
 		error,
+		commandName,
 		2,
 	);
 	if (!parsed) return 1;
@@ -457,14 +468,16 @@ function add(
 	}
 	log(`${replaced ? "Replaced" : "Added"} ${scope} MCP server "${name}" in ${path}.`);
 	if (project && new ProjectTrustStore(options.agentDir).get(options.cwd) !== true) {
-		log(`The project is not trusted, so ${path} is ignored until you start ${APP_NAME} in the project and trust it.`);
+		log(
+			`The project is not trusted, so ${path} is ignored until you start ${commandName} in the project and trust it.`,
+		);
 	}
 	// HTTP servers without an Authorization header may use OAuth.
 	const mayNeedSignIn =
 		"url" in validated &&
 		!Object.keys(validated.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
 	log(
-		`Check it with: ${APP_NAME} mcp list${mayNeedSignIn ? `. If it requires sign-in: ${APP_NAME} mcp login ${name}` : ""}`,
+		`Check it with: ${commandName} mcp list${mayNeedSignIn ? `. If it requires sign-in: ${commandName} mcp login ${name}` : ""}`,
 	);
 	return 0;
 }
@@ -476,11 +489,12 @@ function remove(
 	log: (line: string) => void,
 	error: (line: string) => void,
 ): number {
-	const parsed = parseOptions(args, { local: "flag" }, error);
+	const commandName = options.commandName ?? APP_NAME;
+	const parsed = parseOptions(args, { local: "flag" }, error, commandName);
 	if (!parsed) return 1;
 	const [name, ...extra] = parsed.positional;
 	if (!name || extra.length > 0) {
-		error(`Usage: ${APP_NAME} mcp remove <server> [-l]\n${HELP_HINT}`);
+		error(`Usage: ${commandName} mcp remove <server> [-l]\n${helpHint(commandName)}`);
 		return 1;
 	}
 	const project = parsed.values.has("local");
@@ -577,10 +591,11 @@ async function list(
 		log(`  ${report.transport}`);
 		if (report.override) log(`  project override: ${report.override}`);
 		if (report.state === "needs-auth") {
+			const commandName = options.commandName ?? APP_NAME;
 			log(
 				report.authProvider
-					? `  sign in with: /login ${report.authProvider} in ${APP_NAME}`
-					: `  sign in with: ${APP_NAME} mcp login ${report.name}`,
+					? `  sign in with: /login ${report.authProvider} in ${commandName}`
+					: `  sign in with: ${commandName} mcp login ${report.name}`,
 			);
 		}
 		if (report.tools.length > 0) {

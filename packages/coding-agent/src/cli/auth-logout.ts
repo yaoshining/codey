@@ -7,12 +7,11 @@ import type { AuthOutput } from "./auth-terminal.ts";
 
 /** Dependencies of `runAuthLogout`, injected so tests can capture the output. */
 export interface AuthLogoutOptions {
+	commandName?: string;
 	modelRuntime: ModelRuntime;
 	terminal: AuthOutput;
 	signal: AbortSignal;
 }
-
-const AUTH_LOGOUT_USAGE = `${APP_NAME} auth logout <provider>`;
 
 /**
  * Run `pi auth logout <provider>`: remove the credential `pi auth login` or /login stored, and return the exit code.
@@ -22,7 +21,7 @@ export async function runAuthLogout(args: string[], options: AuthLogoutOptions):
 	const { modelRuntime, terminal, signal } = options;
 	const [providerRef, ...rest] = args;
 	if (providerRef === undefined || providerRef.startsWith("-") || rest.length > 0) {
-		terminal.error(`Usage: ${AUTH_LOGOUT_USAGE}`);
+		terminal.error(`Usage: ${options.commandName ?? APP_NAME} auth logout <provider>`);
 		return 1;
 	}
 

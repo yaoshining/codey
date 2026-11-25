@@ -13,6 +13,7 @@ import {
 export type AppMode = "interactive" | "print" | "json" | "rpc";
 
 export interface ResolveProjectTrustedOptions {
+	commandName?: string;
 	cwd: string;
 	trustStore: ProjectTrustStore;
 	trustOverride?: boolean;
@@ -22,17 +23,18 @@ export interface ResolveProjectTrustedOptions {
 	onExtensionError?: (message: string) => void;
 }
 
-function formatProjectTrustPrompt(cwd: string): string {
-	return `Trust project folder?\n${cwd}\n\nThis allows ${APP_NAME} to load ${CONFIG_DIR_NAME} settings and resources, install missing project packages, and execute project extensions.`;
+function formatProjectTrustPrompt(cwd: string, commandName: string): string {
+	return `Trust project folder?\n${cwd}\n\nThis allows ${commandName} to load ${CONFIG_DIR_NAME} settings and resources, install missing project packages, and execute project extensions.`;
 }
 
 async function selectProjectTrustOption(
 	cwd: string,
 	ctx: ProjectTrustContext,
+	commandName: string,
 ): Promise<ProjectTrustOption | undefined> {
 	const options = getProjectTrustOptions(cwd, { includeSessionOnly: true });
 	const selected = await ctx.ui.select(
-		formatProjectTrustPrompt(cwd),
+		formatProjectTrustPrompt(cwd, commandName),
 		options.map((option) => option.label),
 	);
 	return options.find((option) => option.label === selected);
@@ -88,7 +90,11 @@ export async function resolveProjectTrusted(options: ResolveProjectTrustedOption
 		return false;
 	}
 
-	const selected = await selectProjectTrustOption(options.cwd, options.projectTrustContext);
+	const selected = await selectProjectTrustOption(
+		options.cwd,
+		options.projectTrustContext,
+		options.commandName ?? APP_NAME,
+	);
 	if (selected !== undefined) {
 		saveProjectTrustPromptResult(options.trustStore, selected);
 		return selected.trusted;

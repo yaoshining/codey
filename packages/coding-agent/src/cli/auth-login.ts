@@ -12,6 +12,7 @@ import type { LoginTerminal } from "./auth-terminal.ts";
 
 /** Dependencies of `runAuthLogin`, injected so tests can script the terminal. */
 export interface AuthLoginOptions {
+	commandName?: string;
 	modelRuntime: ModelRuntime;
 	terminal: LoginTerminal;
 	agentDir: string;
@@ -21,7 +22,7 @@ export interface AuthLoginOptions {
 	signal: AbortSignal;
 }
 
-const AUTH_LOGIN_USAGE = `${APP_NAME} auth login <provider> [--api-key] [--no-browser]`;
+const loginUsage = (commandName: string) => `${commandName} auth login <provider> [--api-key] [--no-browser]`;
 
 /** Parsed `pi auth login` arguments. */
 interface LoginRequest {
@@ -35,7 +36,8 @@ interface LoginRequest {
 /** Run `pi auth login <provider>` in the terminal and return the process exit code. */
 export async function runAuthLogin(args: string[], options: AuthLoginOptions): Promise<number> {
 	const { modelRuntime, terminal, signal } = options;
-	const parsed = parseLoginRequest(args);
+	const commandName = options.commandName ?? APP_NAME;
+	const parsed = parseLoginRequest(args, commandName);
 	if (parsed.type === "invalid") {
 		terminal.error(parsed.message);
 		return 1;
@@ -55,11 +57,11 @@ export async function runAuthLogin(args: string[], options: AuthLoginOptions): P
 		return 1;
 	}
 	if (!terminal.interactive) {
-		terminal.error(`"${AUTH_LOGIN_USAGE}" requires an interactive terminal`);
+		terminal.error(`"${loginUsage(commandName)}" requires an interactive terminal`);
 		return 1;
 	}
 
-	const authType = selectAuthType(provider, request.apiKey);
+	const authType = selectAuthType(provider, request.apiKey, commandName);
 	if (authType.type === "unavailable") {
 		terminal.error(authType.message);
 		return 1;
@@ -68,7 +70,7 @@ export async function runAuthLogin(args: string[], options: AuthLoginOptions): P
 		await modelRuntime.login(
 			provider.id,
 			authType.type,
-			createLoginInteraction(provider.id, authType.type, request, terminal, signal),
+			createLoginInteraction(provider.id, authType.type, request, terminal, signal, commandName),
 			{ getDeviceId: options.getDeviceId },
 		);
 	} catch (error: unknown) {
@@ -86,15 +88,16 @@ export async function runAuthLogin(args: string[], options: AuthLoginOptions): P
 	terminal.write(
 		`${authType.type === "oauth" ? `Logged in to ${provider.name}` : `Saved API key for ${provider.name}`}. Credentials saved to ${getAuthPath()}`,
 	);
-	await refreshProviderCatalog(provider, modelRuntime, terminal, signal);
+	await refreshProviderCatalog(provider, modelRuntime, terminal, signal, commandName);
 	if (provider.id === RADIUS_PROVIDER_ID) configureRadiusMcpServer(provider, options);
 	return 0;
 }
 
 function parseLoginRequest(
 	args: string[],
+	commandName: string,
 ): { type: "valid"; request: LoginRequest } | { type: "invalid"; message: string } {
-	const usage = { type: "invalid", message: `Usage: ${AUTH_LOGIN_USAGE}` } as const;
+	const usage = { type: "invalid", message: `Usage: ${loginUsage(commandName)}` } as const;
 	const request: LoginRequest = { providerRef: "", apiKey: false, browser: true };
 	for (const arg of args) {
 		if (arg === "--api-key") request.apiKey = true;
@@ -116,6 +119,7 @@ function parseLoginRequest(
 function selectAuthType(
 	provider: Provider,
 	apiKey: boolean,
+	commandName: string,
 ): { type: AuthType } | { type: "unavailable"; message: string } {
 	const hasApiKeyLogin = provider.auth.apiKey?.login !== undefined;
 	if (!apiKey && provider.auth.oauth) return { type: "oauth" };
@@ -124,7 +128,7 @@ function selectAuthType(
 		return { type: "unavailable", message: `${provider.name} has no API key login. Omit --api-key to sign in.` };
 	}
 	const method = provider.auth.apiKey?.name ?? "ambient credentials";
-	return { type: "unavailable", message: `${provider.name} is configured outside ${APP_NAME} (${method}).` };
+	return { type: "unavailable", message: `${provider.name} is configured outside ${commandName} (${method}).` };
 }
 
 /** Adapt provider prompts and events to the command's selected sign-in method. */
@@ -134,6 +138,7 @@ function createLoginInteraction(
 	request: LoginRequest,
 	terminal: LoginTerminal,
 	signal: AbortSignal,
+	commandName: string,
 ): AuthInteraction {
 	// Account logins list the browser sign-in first, as /login; API key setup asks every selection.
 	const methodChoice = authType === "api_key" ? "ask" : request.browser ? "browser" : "other";
@@ -175,7 +180,7 @@ function createLoginInteraction(
 				const target = webUrl(event.url);
 				if (target !== undefined && request.browser) terminal.openUrl(target);
 				// Providers without a method choice have nothing else to offer, so they get no hint.
-				const rerun = `"${APP_NAME} auth login ${providerId} --no-browser"`;
+				const rerun = `"${commandName} auth login ${providerId} --no-browser"`;
 				const [onlyMethod, ...moreMethods] = skippedMethods;
 				if (onlyMethod !== undefined && moreMethods.length === 0) {
 					terminal.write(`To use "${onlyMethod}" instead, run ${rerun}`);
@@ -226,10 +231,11 @@ async function refreshProviderCatalog(
 	modelRuntime: ModelRuntime,
 	terminal: LoginTerminal,
 	signal: AbortSignal,
+	commandName: string,
 ) {
 	// The login is saved by now, so Ctrl+C only skips the refresh.
 	const cancelled = () => {
-		terminal.write(`Skipped the ${provider.name} model catalog refresh; ${APP_NAME} refreshes it on next start.`);
+		terminal.write(`Skipped the ${provider.name} model catalog refresh; ${commandName} refreshes it on next start.`);
 	};
 	try {
 		const result = await modelRuntime.refresh({
@@ -240,11 +246,11 @@ async function refreshProviderCatalog(
 			cancelled();
 		} else if (result.aborted) {
 			terminal.write(
-				`The ${provider.name} model catalog refresh timed out; ${APP_NAME} refreshes it on next start.`,
+				`The ${provider.name} model catalog refresh timed out; ${commandName} refreshes it on next start.`,
 			);
 		} else if (result.errors.size > 0) {
 			terminal.write(
-				`The ${provider.name} model catalog could not be refreshed; ${APP_NAME} retries on next start.`,
+				`The ${provider.name} model catalog could not be refreshed; ${commandName} retries on next start.`,
 			);
 		}
 	} catch (error: unknown) {
