@@ -270,11 +270,11 @@ export function parseArgs(args: string[]): Args {
 	return result;
 }
 
-export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+export function printHelp(extensionFlags?: ExtensionFlag[], commandName?: string): void {
 	// Codey changes presentation only; Pi's runtime identity and project paths stay intact.
-	const codeyHelp = process.env.CODEY_CLI_HELP === "1";
-	const helpName = codeyHelp ? "codey" : APP_NAME;
-	const selfUpdateName = codeyHelp ? "codey" : "pi";
+	const codeyHelp = commandName !== undefined;
+	const helpName = commandName ?? APP_NAME;
+	const selfUpdateName = commandName ?? "pi";
 	const selfUpdateTarget = codeyHelp ? "the Pi runtime" : "pi";
 	const sessionExample = codeyHelp
 		? `'${`${getAgentDir()}/sessions/--path--/session.jsonl`.replaceAll("'", "'\\''")}'`
@@ -358,7 +358,7 @@ ${chalk.bold("Options:")}
   --offline                      Disable startup network operations (same as PI_OFFLINE=1)
   --                             End option parsing; treat remaining arguments as messages/files
   --help, -h                     Show this help
-  --version, -v                  Show version number
+  --version, -v                  ${codeyHelp ? "Show Pi runtime version for compatibility" : "Show version number"}${codeyHelp ? "\n  --codey-version               Show Codey version (standalone)" : ""}
 
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 

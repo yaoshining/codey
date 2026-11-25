@@ -314,27 +314,27 @@ function reportSettingsErrors(settingsManager: SettingsManager, context: string)
 	}
 }
 
-function getPackageCommandUsage(command: PackageCommand): string {
+function getPackageCommandUsage(command: PackageCommand, commandName: string): string {
 	switch (command) {
 		case "install":
-			return `${APP_NAME} install <source> [-l] [--approve|--no-approve]`;
+			return `${commandName} install <source> [-l] [--approve|--no-approve]`;
 		case "remove":
-			return `${APP_NAME} remove <source> [-l] [--approve|--no-approve]`;
+			return `${commandName} remove <source> [-l] [--approve|--no-approve]`;
 		case "update":
-			return `${APP_NAME} update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
+			return `${commandName} update [source|self|pi] [--self|--extensions|--models|--all] [--extension <source>] [--approve|--no-approve] [--force]`;
 		case "list":
-			return `${APP_NAME} list [--approve|--no-approve]`;
+			return `${commandName} list [--approve|--no-approve]`;
 	}
 }
 
-const CONFIG_COMMAND_USAGE = `${APP_NAME} config [-l] [--approve|--no-approve]`;
+const configCommandUsage = (commandName: string) => `${commandName} config [-l] [--approve|--no-approve]`;
 
-function printConfigCommandHelp(): void {
+function printConfigCommandHelp(commandName: string): void {
 	console.log(`${chalk.bold("Usage:")}
-  ${CONFIG_COMMAND_USAGE}
+  ${configCommandUsage(commandName)}
 
 Open the resource configuration TUI to enable or disable package resources.
-Without -l, starts in global settings (~/${CONFIG_DIR_NAME}/agent/settings.json).
+Without -l, starts in global settings (${commandName === APP_NAME ? `~/${CONFIG_DIR_NAME}/agent/settings.json` : join(getAgentDir(), "settings.json")}).
 Press Tab in the TUI to switch between global and project-local modes.
 
 Options:
@@ -344,11 +344,11 @@ Options:
 `);
 }
 
-function printPackageCommandHelp(command: PackageCommand): void {
+function printPackageCommandHelp(command: PackageCommand, commandName: string): void {
 	switch (command) {
 		case "install":
 			console.log(`${chalk.bold("Usage:")}
-  ${getPackageCommandUsage("install")}
+  ${getPackageCommandUsage("install", commandName)}
 
 Install a package and add it to settings.
 
@@ -358,21 +358,21 @@ Options:
   -na, --no-approve Ignore project-local files for this command
 
 Examples:
-  ${APP_NAME} install npm:@foo/bar
-  ${APP_NAME} install git:github.com/user/repo
-  ${APP_NAME} install git:git@github.com:user/repo
-  ${APP_NAME} install https://github.com/user/repo
-  ${APP_NAME} install ssh://git@github.com/user/repo
-  ${APP_NAME} install ./local/path
+  ${commandName} install npm:@foo/bar
+  ${commandName} install git:github.com/user/repo
+  ${commandName} install git:git@github.com:user/repo
+  ${commandName} install https://github.com/user/repo
+  ${commandName} install ssh://git@github.com/user/repo
+  ${commandName} install ./local/path
 `);
 			return;
 
 		case "remove":
 			console.log(`${chalk.bold("Usage:")}
-  ${getPackageCommandUsage("remove")}
+  ${getPackageCommandUsage("remove", commandName)}
 
 Remove a package and its source from settings.
-Alias: ${APP_NAME} uninstall <source> [-l]
+Alias: ${commandName} uninstall <source> [-l]
 
 Options:
   -l, --local       Remove from project settings (${CONFIG_DIR_NAME}/settings.json)
@@ -380,16 +380,16 @@ Options:
   -na, --no-approve Ignore project-local files for this command
 
 Examples:
-  ${APP_NAME} remove npm:@foo/bar
-  ${APP_NAME} uninstall npm:@foo/bar
+  ${commandName} remove npm:@foo/bar
+  ${commandName} uninstall npm:@foo/bar
 `);
 			return;
 
 		case "update":
 			console.log(`${chalk.bold("Usage:")}
-  ${getPackageCommandUsage("update")}
+  ${getPackageCommandUsage("update", commandName)}
 
-Update pi, installed packages, or model catalogs.
+Update pi, installed packages, or model catalogs.${commandName === APP_NAME ? "" : "\nUpdate this checkout by rerunning its installer with a reviewed revision."}
 
 Options:
   --self                  Update pi only (default when no target is given)
@@ -402,17 +402,17 @@ Options:
   --force                 Reinstall pi even if the current version is latest
 
 Short forms:
-  ${APP_NAME} update                Update pi only
-  ${APP_NAME} update --all          Update pi and all extensions
-  ${APP_NAME} update --models       Refresh model catalogs only
-  ${APP_NAME} update <source>       Update one package
-  ${APP_NAME} update pi             Update pi only (self works as alias to pi)
+  ${commandName} update                Update pi only
+  ${commandName} update --all          Update pi and all extensions
+  ${commandName} update --models       Refresh model catalogs only
+  ${commandName} update <source>       Update one package
+  ${commandName} update pi             Update pi only (self works as alias to pi)
 `);
 			return;
 
 		case "list":
 			console.log(`${chalk.bold("Usage:")}
-  ${getPackageCommandUsage("list")}
+  ${getPackageCommandUsage("list", commandName)}
 
 List installed packages from user and project settings.
 
@@ -831,6 +831,7 @@ function prepareWindowsNpmSelfUpdate(): void {
 }
 
 export interface PackageCommandRuntimeOptions {
+	commandName?: string;
 	extensionFactories?: InlineExtension[];
 }
 
@@ -851,6 +852,7 @@ function reportProjectTrustWarnings(warnings: readonly string[]): void {
 
 async function createCommandSettingsManager(options: {
 	cwd: string;
+	commandName?: string;
 	agentDir: string;
 	projectTrustOverride?: boolean;
 	useSavedProjectTrustOnly?: boolean;
@@ -882,6 +884,7 @@ async function createCommandSettingsManager(options: {
 	const projectTrusted = await resolveProjectTrusted({
 		cwd: options.cwd,
 		trustStore,
+		commandName: options.commandName,
 		trustOverride: options.projectTrustOverride,
 		defaultProjectTrust: settingsManager.getDefaultProjectTrust(),
 		extensionsResult,
@@ -902,12 +905,13 @@ export async function handleConfigCommand(
 	runtimeOptions: PackageCommandRuntimeOptions = {},
 ): Promise<boolean> {
 	const [command, ...rest] = args;
+	const commandName = runtimeOptions.commandName ?? APP_NAME;
 	if (command !== "config") {
 		return false;
 	}
 
 	if (rest.includes("-h") || rest.includes("--help")) {
-		printConfigCommandHelp();
+		printConfigCommandHelp(commandName);
 		return true;
 	}
 
@@ -922,12 +926,12 @@ export async function handleConfigCommand(
 			projectTrustOverride = false;
 		} else if (arg.startsWith("-")) {
 			console.error(chalk.red(`Unknown option ${arg} for "config".`));
-			console.error(chalk.dim(`Use "${APP_NAME} --help" or "${CONFIG_COMMAND_USAGE}".`));
+			console.error(chalk.dim(`Use "${commandName} --help" or "${configCommandUsage(commandName)}".`));
 			process.exitCode = 1;
 			return true;
 		} else {
 			console.error(chalk.red(`Unexpected argument ${arg}.`));
-			console.error(chalk.dim(`Usage: ${CONFIG_COMMAND_USAGE}`));
+			console.error(chalk.dim(`Usage: ${configCommandUsage(commandName)}`));
 			process.exitCode = 1;
 			return true;
 		}
@@ -937,6 +941,7 @@ export async function handleConfigCommand(
 	const agentDir = getAgentDir();
 	const { settingsManager, projectTrustWarnings } = await createCommandSettingsManager({
 		cwd,
+		commandName,
 		agentDir,
 		projectTrustOverride,
 		extensionFactories: runtimeOptions.extensionFactories,
@@ -987,39 +992,42 @@ export async function handlePackageCommand(
 	runtimeOptions: PackageCommandRuntimeOptions = {},
 ): Promise<boolean> {
 	const options = parsePackageCommand(args);
+	const commandName = runtimeOptions.commandName ?? APP_NAME;
 	if (!options) {
 		return false;
 	}
 
 	if (options.help) {
-		printPackageCommandHelp(options.command);
+		printPackageCommandHelp(options.command, commandName);
 		return true;
 	}
 
 	if (options.invalidOption) {
 		console.error(chalk.red(`Unknown option ${options.invalidOption} for "${options.command}".`));
-		console.error(chalk.dim(`Use "${APP_NAME} --help" or "${getPackageCommandUsage(options.command)}".`));
+		console.error(
+			chalk.dim(`Use "${commandName} --help" or "${getPackageCommandUsage(options.command, commandName)}".`),
+		);
 		process.exitCode = 1;
 		return true;
 	}
 
 	if (options.missingOptionValue) {
 		console.error(chalk.red(`Missing value for ${options.missingOptionValue}.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
+		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command, commandName)}`));
 		process.exitCode = 1;
 		return true;
 	}
 
 	if (options.invalidArgument) {
 		console.error(chalk.red(`Unexpected argument ${options.invalidArgument}.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
+		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command, commandName)}`));
 		process.exitCode = 1;
 		return true;
 	}
 
 	if (options.conflictingOptions) {
 		console.error(chalk.red(options.conflictingOptions));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
+		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command, commandName)}`));
 		process.exitCode = 1;
 		return true;
 	}
@@ -1027,7 +1035,7 @@ export async function handlePackageCommand(
 	const source = options.source;
 	if ((options.command === "install" || options.command === "remove") && !source) {
 		console.error(chalk.red(`Missing ${options.command} source.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
+		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command, commandName)}`));
 		process.exitCode = 1;
 		return true;
 	}
@@ -1048,6 +1056,7 @@ export async function handlePackageCommand(
 	const writesProjectPackageConfig = (options.command === "install" || options.command === "remove") && options.local;
 	const { settingsManager, projectTrustWarnings } = await createCommandSettingsManager({
 		cwd,
+		commandName,
 		agentDir,
 		projectTrustOverride: options.projectTrustOverride,
 		useSavedProjectTrustOnly: options.command === "update",

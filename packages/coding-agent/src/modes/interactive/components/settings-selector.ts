@@ -59,6 +59,7 @@ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(
 );
 
 export interface SettingsConfig {
+	appTitle?: string;
 	autoCompact: boolean;
 	defaultModel: string;
 	currentModel?: Model<any>;
@@ -820,7 +821,7 @@ export class SettingsSelectorComponent extends Container {
 		items.splice(skillCommandsIndex + 1, 0, {
 			id: "show-hardware-cursor",
 			label: "Show hardware cursor",
-			description: "Use the terminal cursor instead of Pi's drawn cursor",
+			description: `Use the terminal cursor instead of ${config.appTitle ?? "Pi"}'s drawn cursor`,
 			currentValue: config.showHardwareCursor ? "true" : "false",
 			values: ["true", "false"],
 		});

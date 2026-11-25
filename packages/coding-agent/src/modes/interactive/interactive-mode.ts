@@ -315,7 +315,10 @@ function isDeadTerminalError(error: unknown): boolean {
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
 }
 
-export function formatCrashExtensionHint(extensionMatches: readonly string[] | undefined): string | undefined {
+export function formatCrashExtensionHint(
+	extensionMatches: readonly string[] | undefined,
+	commandName = APP_NAME,
+): string | undefined {
 	const matches = Array.isArray(extensionMatches)
 		? extensionMatches.filter((match): match is string => typeof match === "string" && match.length > 0)
 		: [];
@@ -329,7 +332,7 @@ export function formatCrashExtensionHint(extensionMatches: readonly string[] | u
 				: `${quoted.slice(0, -1).join(", ")}, and ${quoted[quoted.length - 1]}`;
 	const noun = matches.length === 1 ? "extension" : "extensions";
 	const pronoun = matches.length === 1 ? "it" : "them";
-	return `A stack frame came from loaded ${noun} ${labels}, which may be involved. Try disabling ${pronoun} with \`${APP_NAME} config\`, or run \`${APP_NAME} -ne\` to confirm.`;
+	return `A stack frame came from loaded ${noun} ${labels}, which may be involved. Try disabling ${pronoun} with \`${commandName} config\`, or run \`${commandName} -ne\` to confirm.`;
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
@@ -350,14 +353,14 @@ function quoteIfNeeded(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function formatResumeCommand(sessionManager: SessionManager): string | undefined {
+export function formatResumeCommand(sessionManager: SessionManager, commandName = APP_NAME): string | undefined {
 	if (!process.stdout.isTTY) return undefined;
 	if (!sessionManager.isPersisted()) return undefined;
 
 	const sessionFile = sessionManager.getSessionFile();
 	if (!sessionFile || !fs.existsSync(sessionFile)) return undefined;
 
-	const args = [APP_NAME];
+	const args = [commandName];
 	if (!sessionManager.usesDefaultSessionDir()) {
 		args.push("--session-dir", quoteIfNeeded(sessionManager.getSessionDir()));
 	}
@@ -438,6 +441,13 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
  * Options for InteractiveMode initialization.
  */
 export interface InteractiveModeOptions {
+	/** Optional branding for the interactive surface. Runtime identity and version stay unchanged. */
+	branding?: {
+		commandName: string;
+		title: string;
+		version: string;
+		logoLines: (mode: ReturnType<typeof theme.getColorMode>) => readonly string[];
+	};
 	/** Providers that were migrated to auth.json (shows warning) */
 	migratedProviders?: string[];
 	/** Diagnostics collected before the interactive TUI was initialized. */
@@ -807,7 +817,10 @@ export class InteractiveMode {
 		// Define commands for autocomplete
 		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
 			name: command.name,
-			description: command.description,
+			description:
+				command.name === "quit" && this.options.branding
+					? `Quit ${this.options.branding.commandName}`
+					: command.description,
 			...(command.argumentHint && { argumentHint: command.argumentHint }),
 		}));
 
@@ -1108,7 +1121,17 @@ export class InteractiveMode {
 			// its second line the first line of key hints. Terminals that cannot render the logo get a
 			// "Pi vX" line instead, with the key hints below it.
 			const showLogo = supportsPiLogo();
+			const branding = this.options.branding;
 			const withLogo = (hints: string) => {
+				if (branding) {
+					const label = `${theme.fg("accent", branding.title)} ${theme.fg("dim", `v${branding.version}`)}`;
+					const lines = showLogo ? branding.logoLines(theme.getColorMode()) : [];
+					return [
+						...lines.map((line, index) => (index === 0 ? `${line} ${label}` : line)),
+						...(lines.length ? [] : [label]),
+						hints,
+					].join("\n");
+				}
 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
 				const [top, bottom] = piLogoLines();
 				return `${top} ${theme.fg("dim", `v${this.version}`)}\n${bottom} ${hints}`;
@@ -1156,7 +1179,12 @@ export class InteractiveMode {
 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
+				theme.fg(
+					"dim",
+					branding
+						? `${branding.title} can help with your codebase. Ask a question or describe a change.`
+						: "Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.",
+				);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
@@ -1164,7 +1192,7 @@ export class InteractiveMode {
 				1,
 				0,
 			);
-			if (showLogo) header.onLogoClick = (column, row) => playPiLogo3d(this.renderer, column, row);
+			if (showLogo && !branding) header.onLogoClick = (column, row) => playPiLogo3d(this.renderer, column, row);
 			this.builtInHeader = header;
 
 			// Setup UI layout
@@ -1229,10 +1257,11 @@ export class InteractiveMode {
 	private updateTerminalTitle(): void {
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
+		const title = this.options.branding?.title ?? APP_TITLE;
 		if (sessionName) {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(`${title} - ${sessionName} - ${cwdBasename}`);
 		} else {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(`${title} - ${cwdBasename}`);
 		}
 	}
 
@@ -1310,7 +1339,7 @@ export class InteractiveMode {
 		if (crash) {
 			const when = new Date(crash.timestamp).toLocaleString();
 			this.showWarning(
-				`${APP_NAME} crashed on ${when} (${crash.message}). Run /bug to report it; the crash details are attached automatically.`,
+				`${this.options.branding?.title ?? APP_NAME} crashed on ${when} (${crash.message}). Run /bug to report it${this.options.branding ? " to the Pi developers" : ""}; the crash details are attached automatically.`,
 			);
 		}
 
@@ -1408,7 +1437,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return `tmux extended-keys-format is xterm. ${this.options.branding?.title ?? "Pi"} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
@@ -2326,6 +2355,7 @@ export class InteractiveMode {
 					error instanceof Error ? error.stack : undefined,
 					this.session.resourceLoader.getExtensions().extensions,
 				),
+				this.options.branding?.commandName,
 			);
 		} catch {
 			return undefined;
@@ -2349,8 +2379,11 @@ export class InteractiveMode {
 	}
 
 	private crashReportInstructions(): string {
-		const resume = this.session.sessionFile ? `run \`${APP_NAME} -r\` to resume the session, then` : "start pi and";
-		return `To report this crash: ${resume} run /bug. The crash details are attached automatically.`;
+		const commandName = this.options.branding?.commandName;
+		const resume = this.session.sessionFile
+			? `run \`${commandName ?? APP_NAME} -r\` to resume the session, then`
+			: `start ${commandName ?? "pi"} and`;
+		return `To report this crash${commandName ? " to the Pi developers" : ""}: ${resume} run /bug. The crash details are attached automatically.`;
 	}
 
 	private suggestBugReport(): void {
@@ -2358,7 +2391,13 @@ export class InteractiveMode {
 		this.bugReportHintShown = true;
 		this.chatContainer.addChild(
 			new ThemedText(
-				() => theme.fg("muted", `If this looks like a ${APP_NAME} bug, /bug sends a report to the developers.`),
+				() =>
+					theme.fg(
+						"muted",
+						this.options.branding
+							? "/bug sends an upstream report to the Pi developers."
+							: `If this looks like a ${APP_NAME} bug, /bug sends a report to the developers.`,
+					),
 				this.outputPad,
 				0,
 			),
@@ -2387,10 +2426,10 @@ export class InteractiveMode {
 			change.kind === "updated"
 				? `${APP_NAME} was updated to ${change.version} while this session was running (${VERSION})`
 				: `The ${APP_NAME} installation this session runs from was removed or replaced`;
-		const resumeCommand = formatResumeCommand(this.sessionManager);
+		const resumeCommand = formatResumeCommand(this.sessionManager, this.options.branding?.commandName);
 		const restart = resumeCommand
 			? `Restart with \`${resumeCommand}\` to continue this session.`
-			: `Restart ${APP_NAME}.`;
+			: `Restart ${this.options.branding?.commandName ?? APP_NAME}.`;
 		this.showWarning(`${cause}. Features that load code on demand can fail until restart. ${restart}`);
 		return true;
 	}
@@ -4476,7 +4515,7 @@ export class InteractiveMode {
 				() =>
 					theme.fg(
 						"warning",
-						`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`,
+						`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart ${this.options.branding?.commandName ?? "pi"}.`,
 					),
 				1,
 				0,
@@ -4564,7 +4603,7 @@ export class InteractiveMode {
 		this.stop();
 		await this.runtimeHost.dispose();
 
-		const resumeCommand = formatResumeCommand(this.sessionManager);
+		const resumeCommand = formatResumeCommand(this.sessionManager, this.options.branding?.commandName);
 		if (resumeCommand) {
 			// Own line so the command can be selected with a triple-click (#12237).
 			process.stdout.write(`${chalk.dim("To resume this session:")}\n${resumeCommand}\n`);
@@ -4615,7 +4654,7 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch {}
-		console.error(`${APP_NAME} exiting due to uncaughtException:`);
+		console.error(`${this.options.branding?.commandName ?? APP_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		const extensionHint = this.getCrashExtensionHint(error);
 		if (extensionHint) console.error(`\n${extensionHint}`);
@@ -4881,8 +4920,13 @@ export class InteractiveMode {
 
 	showNewVersionNotification(release: LatestPiRelease): void {
 		const updateInstruction = () =>
-			theme.fg("muted", `New version ${release.version} is available. Run `) +
-			theme.fg("accent", `${APP_NAME} update`);
+			this.options.branding
+				? theme.fg(
+						"muted",
+						`Pi runtime ${release.version} is available upstream. Update ${this.options.branding.title} with a reviewed installer revision.`,
+					)
+				: theme.fg("muted", `New version ${release.version} is available. Run `) +
+					theme.fg("accent", `${APP_NAME} update`);
 		const changelogUrl = "https://pi.dev/changelog";
 		const changelogLine = () => {
 			const changelogLink = getCapabilities().hyperlinks
@@ -4912,7 +4956,7 @@ export class InteractiveMode {
 	showPackageUpdateNotification(packages: string[]): void {
 		const updateInstruction = () =>
 			theme.fg("muted", "Package updates are available. Run ") +
-			theme.fg("accent", `${APP_NAME} update --extensions`);
+			theme.fg("accent", `${this.options.branding?.commandName ?? APP_NAME} update --extensions`);
 		const packageLines = packages.map((pkg) => `- ${pkg}`).join("\n");
 
 		this.chatContainer.addChild(new Spacer(1));
@@ -5164,6 +5208,7 @@ export class InteractiveMode {
 			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
+					appTitle: this.options.branding?.title,
 					defaultModel,
 					currentModel: this.session.model,
 					availableDefaultModels: this.session.modelRuntime.getAvailableSnapshot(),
@@ -5580,7 +5625,7 @@ export class InteractiveMode {
 					trustStore.setMany(selection.updates);
 					done();
 					this.showStatus(
-						`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart ${APP_NAME} for this to take effect.`,
+						`Saved trust decision: ${selection.trusted ? "trusted" : "untrusted"}. Restart ${this.options.branding?.commandName ?? APP_NAME} for this to take effect.`,
 					);
 				},
 				onCancel: () => {
@@ -6445,7 +6490,7 @@ export class InteractiveMode {
 			`${providerOption.name} setup`,
 		);
 		dialog.showInfo(
-			`${providerOption.method?.name ?? "Authentication"} is configured outside ${APP_NAME}.`,
+			`${providerOption.method?.name ?? "Authentication"} is configured outside ${this.options.branding?.title ?? APP_NAME}.`,
 			[],
 			true,
 		);

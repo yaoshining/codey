@@ -69,7 +69,7 @@ import { builtInExtensions } from "./extensions/index.ts";
 import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { writeDiagnosticsToStderr } from "./modes/diagnostics-stderr.ts";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { InteractiveMode, type InteractiveModeOptions, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, setThemeJsonValidator, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { validateThemeJson } from "./modes/interactive/theme/theme-schema.ts";
 import { cleanupManagedInstall, handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
@@ -127,7 +127,7 @@ function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
 	return !parsed.print && parsed.mode === undefined && (parsed.help === true || parsed.listModels !== undefined);
 }
 
-async function runAuthLoginCommand(args: string[]): Promise<number> {
+async function runAuthLoginCommand(args: string[], commandName: string): Promise<number> {
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
 	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
@@ -140,6 +140,7 @@ async function runAuthLoginCommand(args: string[]): Promise<number> {
 	process.on("SIGINT", interrupt);
 	try {
 		return await runAuthLogin(args, {
+			commandName,
 			modelRuntime,
 			terminal: createProcessLoginTerminal(interrupt),
 			agentDir,
@@ -152,34 +153,41 @@ async function runAuthLoginCommand(args: string[]): Promise<number> {
 	}
 }
 
-async function runAuthLogoutCommand(args: string[]): Promise<number> {
+async function runAuthLogoutCommand(args: string[], commandName: string): Promise<number> {
 	const signal = AbortSignal.timeout(15_000);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal });
 	return runAuthLogout(args, {
+		commandName,
 		modelRuntime,
 		terminal: { write: (line) => console.log(line), error: (line) => console.error(line) },
 		signal,
 	});
 }
 
-async function runAuthCommand(args: string[]): Promise<boolean> {
+async function runAuthCommand(args: string[], commandName = APP_NAME): Promise<boolean> {
 	if (isAuthCommandHelp(args)) {
-		printAuthCommandHelp();
+		printAuthCommandHelp(commandName === APP_NAME ? undefined : commandName);
 		return true;
 	}
 	if (args[0] === "auth" && args[1] === "login") {
 		// main() already applied --offline.
-		process.exitCode = await runAuthLoginCommand(args.slice(2).filter((arg) => arg !== "--offline"));
+		process.exitCode = await runAuthLoginCommand(
+			args.slice(2).filter((arg) => arg !== "--offline"),
+			commandName,
+		);
 		return true;
 	}
 	if (args[0] === "auth" && args[1] === "logout") {
-		process.exitCode = await runAuthLogoutCommand(args.slice(2).filter((arg) => arg !== "--offline"));
+		process.exitCode = await runAuthLogoutCommand(
+			args.slice(2).filter((arg) => arg !== "--offline"),
+			commandName,
+		);
 		return true;
 	}
 
 	let command: AuthCommand | undefined;
 	try {
-		command = parseAuthCommand(args);
+		command = parseAuthCommand(args, commandName);
 	} catch (error) {
 		const message = error instanceof AuthCommandError ? error.message : "Failed to parse auth command";
 		console.error(chalk.red(`Error: ${message}`));
@@ -192,7 +200,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 	if (parsed.unknownFlags.size > 0) {
 		const option = parsed.unknownFlags.keys().next().value;
 		console.error(chalk.red(`Unknown option --${option} for "${getAuthCommandName(command.kind)}".`));
-		console.error(chalk.dim(`Use "${APP_NAME} --help" or "${getAuthCommandUsage(command.kind)}".`));
+		console.error(chalk.dim(`Use "${commandName} --help" or "${getAuthCommandUsage(command.kind, commandName)}".`));
 		process.exitCode = 1;
 		return true;
 	}
@@ -599,6 +607,7 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 }
 
 export interface MainOptions {
+	branding?: InteractiveModeOptions["branding"];
 	extensionFactories?: InlineExtension[];
 }
 
@@ -607,13 +616,15 @@ export async function main(args: string[], options?: MainOptions) {
 	// Commands and startup selectors can load user-authored themes before runtime creation.
 	setThemeJsonValidator(validateThemeJson);
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
+	const branding = options?.branding;
+	const commandName = branding?.commandName;
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
 		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
-	if (await runAuthCommand(args)) {
+	if (await runAuthCommand(args, commandName)) {
 		return;
 	}
 
@@ -639,7 +650,7 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (await handlePackageCommand(args, { extensionFactories })) {
+	if (await handlePackageCommand(args, { extensionFactories, commandName })) {
 		const exitCode = process.exitCode ?? 0;
 		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
 			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
@@ -652,13 +663,13 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	if (await handleConfigCommand(args, { extensionFactories })) {
+	if (await handleConfigCommand(args, { extensionFactories, commandName })) {
 		return;
 	}
 
 	if (args[0] === "mcp") {
 		const { runMcpCommand } = await loadMcpCommand();
-		process.exitCode = await runMcpCommand(args.slice(1), { cwd, agentDir });
+		process.exitCode = await runMcpCommand(args.slice(1), { cwd, agentDir, commandName });
 		return;
 	}
 
@@ -823,6 +834,7 @@ export async function main(args: string[], options?: MainOptions) {
 							const trusted = await resolveProjectTrusted({
 								cwd,
 								trustStore,
+								commandName,
 								trustOverride: parsed.projectTrustOverride,
 								defaultProjectTrust: startupSettingsManager.getDefaultProjectTrust(),
 								extensionsResult,
@@ -962,7 +974,7 @@ export async function main(args: string[], options?: MainOptions) {
 		const extensionFlags = resourceLoader
 			.getExtensions()
 			.extensions.flatMap((extension) => Array.from(extension.flags.values()));
-		printHelp(extensionFlags);
+		printHelp(extensionFlags, commandName);
 		process.exit(0);
 	}
 
@@ -1032,6 +1044,7 @@ export async function main(args: string[], options?: MainOptions) {
 	} else if (appMode === "interactive") {
 		announcePackageInstalls = false;
 		const interactiveMode = new InteractiveMode(runtime, {
+			branding,
 			migratedProviders,
 			startupDiagnostics,
 			// A fallback to another model is already in startupDiagnostics.

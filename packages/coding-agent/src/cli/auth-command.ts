@@ -15,18 +15,18 @@ export interface AuthCommand {
 
 export class AuthCommandError extends Error {}
 
-const AUTH_COMMAND_USAGE: Record<AuthCommandKind, string> = {
-	check: `${APP_NAME} auth check --provider <provider> [--json] [--credentials] [--no-refresh]`,
-	api_key: `${APP_NAME} auth print-api-key --provider <provider> [--model <model>]`,
-	bearer_token: `${APP_NAME} auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]`,
-};
+const authCommandUsage = (commandName: string): Record<AuthCommandKind, string> => ({
+	check: `${commandName} auth check --provider <provider> [--json] [--credentials] [--no-refresh]`,
+	api_key: `${commandName} auth print-api-key --provider <provider> [--model <model>]`,
+	bearer_token: `${commandName} auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]`,
+});
 
 export function getAuthCommandName(kind: AuthCommandKind): string {
 	return kind === "check" ? "auth check" : kind === "api_key" ? "auth print-api-key" : "auth print-bearer-token";
 }
 
-export function getAuthCommandUsage(kind: AuthCommandKind): string {
-	return AUTH_COMMAND_USAGE[kind];
+export function getAuthCommandUsage(kind: AuthCommandKind, commandName = APP_NAME): string {
+	return authCommandUsage(commandName)[kind];
 }
 
 export function isAuthCommandHelp(args: string[]): boolean {
@@ -36,10 +36,9 @@ export function isAuthCommandHelp(args: string[]): boolean {
 	);
 }
 
-export function printAuthCommandHelp(): void {
-	const codeyHelp = process.env.CODEY_CLI_HELP === "1";
-	const helpName = codeyHelp ? "codey" : "pi";
-	const authPath = codeyHelp ? getAuthPath() : "~/.pi/agent/auth.json";
+export function printAuthCommandHelp(commandName?: string): void {
+	const helpName = commandName ?? "pi";
+	const authPath = commandName ? getAuthPath() : "~/.pi/agent/auth.json";
 	console.log(`Usage:
   ${helpName} auth login <provider> [--api-key] [--no-browser]
   ${helpName} auth logout <provider>
@@ -72,7 +71,7 @@ Other options:
   --no-refresh            Do not refresh expired OAuth credentials during check`);
 }
 
-export function parseAuthCommand(args: string[]): AuthCommand | undefined {
+export function parseAuthCommand(args: string[], commandName = APP_NAME): AuthCommand | undefined {
 	if (args[0] !== "auth") return undefined;
 
 	const kind =
@@ -85,7 +84,7 @@ export function parseAuthCommand(args: string[]): AuthCommand | undefined {
 					: undefined;
 	if (!kind) {
 		throw new AuthCommandError(
-			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth login", "${APP_NAME} auth logout", "${APP_NAME} auth print-api-key", "${APP_NAME} auth print-bearer-token", or "${APP_NAME} auth check".`,
+			`Unknown auth command "${args[1] ?? ""}". Use "${commandName} auth login", "${commandName} auth logout", "${commandName} auth print-api-key", "${commandName} auth print-bearer-token", or "${commandName} auth check".`,
 		);
 	}
 

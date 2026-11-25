@@ -25,7 +25,7 @@ CODEY_CODING_AGENT_DIR="$HOME/.pi/agent" codey
 
 This shares **writable** settings, credentials, sessions and trust records. Normal Pi startup may migrate legacy configuration or sessions **inside the directory you selected**. It is not a read-only mode. The legacy `PI_CODING_AGENT_DIR` override also remains supported. No sharing command is run automatically.
 
-The wrapper sets `CODEY_CLI_HELP=1` solely for the two help printers. Pi runtime markers (`AI_AGENT=pi`, `PI_CODING_AGENT=true`) and shell-tool `PI_*` session metadata remain unchanged. Child processes inherit these variables, directory overrides and the help marker; a nested Pi launched inside Codey can therefore share Codey's selected state and help display. Launch stock Pi from an independent shell for its normal defaults.
+The Codey launcher passes branding directly to the host. Pi runtime markers (`AI_AGENT=pi`, `PI_CODING_AGENT=true`) and shell-tool `PI_*` session metadata remain unchanged. Child processes inherit the directory overrides, so a nested Pi launched inside Codey can share its selected state. Launch stock Pi from an independent shell for its normal defaults.
 
 ## Install a reviewed commit
 
@@ -59,7 +59,7 @@ cd /path/to/project
 codey
 ```
 
-All Pi options remain available, for example `codey --help`, `codey --version` and `codey --mode rpc --no-session`. Updating Codey means rerunning the installer with a new reviewed commit. Pi's inherited `update` command is not a Codey checkout updater. Prior checkouts remain available for rollback by rerunning the installer with their commit.
+All Pi options remain available. Run `codey --help` for usage or `codey --codey-version` for the Codey version shown in the terminal. `codey --version` reports the underlying Pi version for RPC clients such as T3 Code, whose compatibility check uses it. Updating Codey means rerunning the installer with a new reviewed commit. Pi's inherited `update` command is not a Codey checkout updater. Prior checkouts remain available for rollback by rerunning the installer with their commit. Project-local `.pi` paths and the MCP OAuth identity remain compatible with Pi. `/bug` still reports to the upstream Pi project, and Pi runtime release notices refer to upstream releases.
 
 To uninstall, remove the `~/.local/bin/codey` symlink and the Codey checkout directory, then remove the `# Codey CLI path` line and following export from the shell startup files. Pi's settings and any separately installed `pi` are unaffected.
 

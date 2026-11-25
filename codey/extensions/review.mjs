@@ -4,6 +4,7 @@ import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { getKeybindings, Text } from "@earendil-works/pi-tui";
+import { styleReviewMarker } from "../branding.mjs";
 
 const exec = promisify(execFile);
 const reviewEntry = "codey-review";
@@ -125,7 +126,7 @@ export default function review(pi) {
 	pi.registerEntryRenderer(reviewEntry, (entry, _options, theme) => {
 		if (typeof entry.data?.text !== "string") return;
 		const text = stripVTControlCharacters(entry.data.text);
-		return new Text(entry.data.phase === "report" ? text : theme.bold(text), 1, 1);
+		return new Text(entry.data.phase === "report" ? text : styleReviewMarker(text, theme), 1, 1);
 	});
 	pi.on("session_shutdown", () => reviewController?.abort());
 	// If a client forwards a literal review command as ordinary input, keep it out of the tool-enabled turn.
@@ -153,7 +154,7 @@ export default function review(pi) {
 			}
 			let stopListening;
 			try {
-				publish("started", `>> Code review started: ${scope} <`);
+				publish("started", `>> Code review started: ${scope} <<`);
 				if (ctx.mode === "tui") {
 					const keybindings = getKeybindings();
 					const interrupt = keybindings.getKeys("app.interrupt").join("/");
