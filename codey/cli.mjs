@@ -4,13 +4,20 @@ import { VERSION } from "../packages/coding-agent/src/config.ts";
 import { main } from "../packages/coding-agent/src/main.ts";
 import { branding } from "./branding.mjs";
 import review from "./extensions/review.mjs";
+import { runWorktree } from "./worktree.mjs";
 
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "--pi-version") {
 	console.log(VERSION);
 } else if (args.length === 1 && args[0] === "--codey-version") {
 	console.log(branding.version);
+} else if (args[0] === "worktree") {
+	await runWorktree(args.slice(1), () => launch([]));
 } else {
+	await launch(args);
+}
+
+async function launch(args) {
 	setupCli();
 	await main(args, {
 		branding,
