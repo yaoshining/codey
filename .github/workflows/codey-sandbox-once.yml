@@ -1,0 +1,42 @@
+name: Verify Codey offline sandbox
+
+on:
+  push:
+    branches: [verify/codey-sandbox-b059003]
+    paths: [.github/workflows/codey-sandbox-once.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CANDIDATE: b05900326d306711273298588b0391d581e9b164
+    steps:
+      - name: Check out the fixed Codey revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: b05900326d306711273298588b0391d581e9b164
+          persist-credentials: false
+      - name: Set up the host CLI
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.22.3"
+          package-manager-cache: false
+      - name: Build the local image from the candidate archive
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          git show --no-patch --format='Candidate %H'
+          docker info --format 'Docker {{.ServerVersion}}, cgroup v{{.CgroupVersion}}, memory={{.MemoryLimit}}, swap={{.SwapLimit}}, CPU={{.CPUCfsQuota}}, PID={{.PidsLimit}}, security={{json .SecurityOptions}}'
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+          git archive "$CANDIDATE" | docker build --file codey/sandbox/Dockerfile --tag codey-sandbox:ci -
+      - name: Verify the public CLI in Docker with synthetic inputs
+        shell: bash
+        run: |
+          image="$(docker image inspect --format '{{.Id}}' codey-sandbox:ci)"
+          "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/integration.py ./codey/bin/codey "$image"
+          printf '%s\n' 'PASS: intended snapshot edit' 'PASS: original checkouts and Git status unchanged' 'PASS: host canary and Docker socket absent' 'PASS: loopback only and TCP to 192.0.2.1 denied' 'PASS: non-root, capabilities dropped, no new privileges, seccomp, read-only root and cgroup limits' 'PASS: synthetic model reply'
