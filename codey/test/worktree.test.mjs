@@ -1,7 +1,7 @@
 // Exercise worktree provisioning against disposable Git repositories.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -36,9 +36,9 @@ function fixture(t) {
 	writeFileSync(join(cwd, "tracked"), "base\n");
 	git("add", "tracked");
 	git("commit", "-qm", "baseline");
-	const run = (...args) => {
+	const runAt = (directory, ...args) => {
 		const result = spawnSync(process.execPath, ["--input-type=module", "-e", command, "--", ...args], {
-			cwd,
+			cwd: directory,
 			env,
 			encoding: "utf8",
 			timeout: 20_000,
@@ -46,7 +46,7 @@ function fixture(t) {
 		assert.ifError(result.error);
 		return result;
 	};
-	return { parent, cwd, git, run };
+	return { parent, cwd, git, runAt, run: (...args) => runAt(cwd, ...args) };
 }
 
 test("creates a branch at the requested base and launches from the new root without changing the source", (t) => {
@@ -91,11 +91,11 @@ test("rejects invalid bases, directory collisions and existing branches without 
 
 	for (const [args, expected] of [
 		[["bad", "--base", "missing"], /does not resolve to a commit/],
-		[["first"], /Destination already exists/],
+		[["first"], /already exists/],
 		[["already", "--path", external], /already exists/],
 		[["nested", "--path", inside], /outside existing worktree/],
 		[["nested", "--path", join(parent, "symlink", "inside")], /outside existing worktree/],
-		[["other", "--path", checkout], /Destination already exists/],
+		[["other", "--path", checkout], /outside managed storage/],
 		[["../escape"], /Use a task name/],
 		[["other", "--session", "old"], /Unknown option/],
 	]) {
@@ -122,4 +122,69 @@ test("keeps the task branch and checkout when the Codey launch fails", (t) => {
 	assert.equal(git("-C", destination, "branch", "--show-current"), "codey/startup-failure");
 	assert.equal(git("-C", destination, "status", "--porcelain"), "");
 	assert.equal(git("-C", cwd, "branch", "--show-current"), "main");
+});
+
+
+test("lists and safely deletes managed checkouts by Git identity", (t) => {
+	const { parent, cwd, git, run, runAt } = fixture(t);
+	const first = run("managed-a");
+	const second = run("managed-b");
+	assert.equal(first.status, 0, first.stderr);
+	assert.equal(second.status, 0, second.stderr);
+	const path = first.stdout.trim();
+	const other = second.stdout.trim();
+	assert.notEqual(path, other);
+	const rows = run("list").stdout.trim().split("\n");
+	assert.equal(rows.length, 2);
+	const id = rows.find((row) => row.includes("codey/managed-a")).split("\t")[0];
+	const bucket = join(parent, ".codey", "worktrees", id);
+	assert.equal(path, join(bucket, "project ' #?"));
+	const child = join(path, "child");
+	const alias = join(parent, "alias");
+	mkdirSync(child);
+	symlinkSync(child, alias, "dir");
+	for (const here of [path, child, alias]) {
+		const result = runAt(here, "delete", id);
+		assert.equal(result.status, 1, result.stderr);
+		assert.match(result.stderr, /current worktree/);
+	}
+	assert.match(runAt(alias, "list").stdout, /codey\/managed-a.*\(current\)/);
+	writeFileSync(join(path, "dirty"), "preserve");
+	const dirty = run("delete", id);
+	assert.equal(dirty.status, 1);
+	assert.match(dirty.stderr, /modified or untracked/);
+	assert.equal(readFileSync(join(path, "dirty"), "utf8"), "preserve");
+	rmSync(join(path, "dirty"));
+	const ignores = join(parent, "ignore-rules");
+	writeFileSync(ignores, "ignored-output\n");
+	git("config", "core.excludesFile", ignores);
+	writeFileSync(join(path, "ignored-output"), "preserve ignored file");
+	assert.equal(git("-C", path, "status", "--porcelain"), "");
+	const ignored = run("delete", id);
+	assert.equal(ignored.status, 1);
+	assert.match(ignored.stderr, /including ignored files/);
+	assert.equal(readFileSync(join(path, "ignored-output"), "utf8"), "preserve ignored file");
+	rmSync(join(path, "ignored-output"));
+	rmdirSync(child);
+	const removed = run("delete", id);
+	assert.equal(removed.status, 0, removed.stderr);
+	assert.equal(existsSync(bucket), false);
+	assert.equal(git("rev-parse", "codey/managed-a"), git("rev-parse", "main"));
+	assert.equal(existsSync(other), true);
+	assert.equal(existsSync(cwd), true);
+
+	const custom = join(parent, "custom");
+	assert.equal(run("custom", "--path", custom).status, 0);
+	assert.doesNotMatch(run("list").stdout, /codey\/custom/);
+	assert.equal(run("delete", custom).status, 1);
+	assert.equal(existsSync(custom), true);
+	const fromCustom = runAt(custom, "from-custom");
+	assert.equal(fromCustom.status, 0, fromCustom.stderr);
+	assert.equal(fromCustom.stdout.trim().split("/").at(-1), "project ' #?");
+
+	const unmarked = join(parent, ".codey", "worktrees", "task-ABC123", "unmarked");
+	git("worktree", "add", "-qb", "codey/unmarked", unmarked);
+	assert.doesNotMatch(run("list").stdout, /codey\/unmarked/);
+	assert.equal(run("delete", "task-ABC123").status, 1);
+	assert.equal(existsSync(unmarked), true);
 });

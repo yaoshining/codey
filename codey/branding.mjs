@@ -17,12 +17,17 @@ const palette = {
 	surface: rgbColor(21, 27, 36),
 	mark: rgbColor(242, 245, 248),
 	accent: rgbColor(255, 184, 101),
+	info: { dark: rgbColor(139, 192, 255), light: rgbColor(0, 77, 142) },
 };
 const colors = { ".": palette.surface, C: palette.mark, ">": palette.accent };
 const colorEnabled = () => !process.env.NO_COLOR && process.env.FORCE_COLOR !== "0" && process.env.TERM !== "dumb";
 
 export function styleReviewMarker(text, theme) {
 	return colorEnabled() ? theme.style(text, { fg: palette.accent, bg: palette.surface }) : text;
+}
+
+export function styleInfo(text, theme) {
+	return colorEnabled() ? theme.style(text, { fg: palette.info[theme.appearance] }) : text;
 }
 
 function logoLines(mode) {

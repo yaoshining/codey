@@ -89,19 +89,27 @@ The repository-wide check may report the inherited Mistral fixture errors for `m
 
 These tests run on the host platform; passing on Linux does not establish that the CLI was tested on macOS. The wrapper and installer use macOS-compatible Bash syntax and avoid GNU-only path tools.
 
-## Start a task in a Git worktree
+## Work in a separate Git checkout
 
-From a Git checkout, run:
+Run `/worktree` in the interactive terminal and choose an action:
+
+- **Continue current conversation** creates a checkout from `HEAD` and copies the active conversation into a new session there. Resuming that session uses the new checkout. The original session stays in its original directory.
+- **Start new conversation** creates a checkout from `HEAD` with empty conversation history.
+- **Browse worktrees** lists managed checkouts in this repository. Select one to start a new conversation there, copy its absolute path, or delete it. The current checkout cannot be deleted. Switching requires a saved-session launch.
+
+You can also create and manage worktrees from your shell:
 
 ```bash
 codey worktree fix-tests --base main
+codey worktree list
+codey worktree delete <id>
 ```
 
-This creates branch `codey/fix-tests` and opens a fresh terminal session at the new checkout root. The default base is the current `HEAD`. The default destination is a sibling directory named `<current-checkout>-<task>`. Use `--path <directory>` to choose a different new path with an existing parent. Relative paths are resolved from your current directory. Run `codey worktree --help` for the options.
+The first command creates branch `codey/fix-tests` and opens a fresh session. The default base is the current `HEAD`. Managed checkouts live under `~/.codey/worktrees/<random-id>/<project>/`. For a custom location, use `--path <directory>` with an existing parent outside managed storage. Relative paths are resolved from your current directory. Existing sibling checkouts and custom paths remain available through Git. Run `codey worktree --help` for the options.
 
 The new checkout starts with committed files from the selected base. Your original index, uncommitted files and sessions stay in place. Git shares refs and objects across worktrees. The command skips Git checkout hooks and submodule initialization. Codey loads project settings from the new checkout under its normal trust rules.
 
-Commit your task changes before running `/review main` to review the branch. The worktree and branch remain when you quit or if startup fails. Run `git worktree list` to find your checkout, then enter its directory and run `codey` to open another session there. Worktrees isolate checkouts. They share your filesystem permissions.
+Commit your task changes before running `/review main` to review the branch. Checkouts remain when you quit or if startup fails. Deletion uses the ID from the repository's managed list and keeps the branch. Codey refuses to delete the current checkout from its root or a child directory and keeps checkouts with changes or untracked files, including ignored files. Worktrees isolate checkouts and share your filesystem permissions.
 
 ## Review changes
 
