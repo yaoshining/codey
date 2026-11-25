@@ -235,6 +235,8 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	const help = run(context, ["--help", ...noResources]).stdout;
 	assert.match(help, /^codey - AI coding assistant/m);
 	assert.match(help, /  codey \[options\]/);
+	assert.match(help, /enter \/quit to exit/);
+	assert.doesNotMatch(help, /\/exit\b/);
 	assert.match(help, /--codey-version/);
 	assert.ok(help.includes(context.agent));
 	const exportPath = join(context.agent, "sessions/--path--/session.jsonl");
@@ -247,6 +249,7 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	const original = run(context, ["--help", ...noResources], { command: "pi" }).stdout;
 	assert.match(original, /^pi - AI coding assistant/m);
 	assert.match(original, /  pi \[options\]/);
+	assert.match(original, /^  # Interactive mode$/m);
 	assert.ok(original.includes("Config directory (default: ~/.pi/agent)"));
 	assert.ok(original.includes("pi --export ~/.pi/agent/sessions/--path--/session.jsonl"));
 	assert.doesNotMatch(original, /codey -|  codey /);

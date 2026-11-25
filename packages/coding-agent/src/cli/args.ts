@@ -369,7 +369,7 @@ ${chalk.bold("Examples:")}
   # Print an OAuth bearer token for an external client (refreshes if expired)
   ${helpName} auth print-bearer-token --provider openai-codex
 
-  # Interactive mode
+  # Interactive mode${codeyHelp ? " (enter /quit to exit)" : ""}
   ${helpName}
 
   # Interactive mode with initial prompt
