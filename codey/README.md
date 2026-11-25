@@ -31,7 +31,7 @@ The Codey launcher passes branding directly to the host. Pi runtime markers (`AI
 
 Requirements: macOS or Linux, Git, curl, tar, npm and Node.js **22.19 or newer**. The installer does not install Node or require sudo. It installs this checkout from GitHub, using its existing lockfile with `npm ci --ignore-scripts`. It runs from source, so no build or npm publication is required.
 
-Pi's source runtime also needs gitignored model JSON. Codey restores only that metadata from the official `pi-ai` 1.6.0 npm archive, pinned by SHA512 in `model-data.json`, then validates it with Pi's existing validator. It does not run the archive's code, install a registry CLI, regenerate source or contact model providers. The pinned data is byte-identical to the development environment's existing provider JSON. When upstream bumps `pi-ai`, this Codey pin must be updated and verified for the new version.
+Pi's source runtime also needs gitignored model JSON. Codey restores only that metadata from the official `pi-ai` npm archive for the matching source version, pinned by SHA-512 in `model-data.json`, then validates it with Pi's existing validator. It does not run the archive's code, install a registry CLI, regenerate source or contact model providers. When upstream bumps `pi-ai`, this Codey pin must be updated and verified for the new version.
 
 Replace `FULL_COMMIT_SHA` below with the reviewed 40-character commit. Use the same value in both places:
 
