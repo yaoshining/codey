@@ -1,0 +1,47 @@
+; Closed by default. The worker and its child processes use this same profile.
+(version 1)
+(deny default)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow sysctl-read
+  (sysctl-name-prefix "hw.")
+  (sysctl-name "kern.argmax")
+  (sysctl-name "kern.osrelease")
+  (sysctl-name "kern.ostype")
+  (sysctl-name "kern.osversion")
+  (sysctl-name "kern.version")
+  (sysctl-name "kern.maxfilesperproc"))
+(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
+(allow file-read-metadata
+  (path-ancestors (param "WORKSPACE"))
+  (path-ancestors (param "SCRATCH"))
+  (path-ancestors (param "INSTALL"))
+  (path-ancestors (param "NODE")))
+(allow file-read* file-map-executable
+  (subpath "/System/Library")
+  (subpath "/usr/lib")
+  (subpath "/usr/bin")
+  (subpath "/bin")
+  (subpath (param "INSTALL"))
+  (literal (param "NODE"))
+  (subpath (param "TOOLCHAIN"))
+  (subpath (param "TOOLCHAIN_LINKS")))
+(allow process-exec
+  (subpath "/usr/bin")
+  (subpath "/bin")
+  (literal (param "NODE")))
+(allow file-read*
+  (literal "/dev/null")
+  (literal "/dev/urandom")
+  (literal "/dev/random")
+  (literal "/private/etc/passwd")
+  (literal "/private/etc/localtime")
+  (subpath "/private/var/db/timezone"))
+(allow file-write-data (literal "/dev/null"))
+(allow file-read* file-write* (subpath (param "WORKSPACE")) (subpath (param "SCRATCH")))
+; These names stay protected even inside the selected workspace. Explicit
+; character classes preserve the restriction on case-insensitive volumes.
+(deny file-read* file-write*
+  (regex #"/([.][gG][iI][tT]|[.][eE][nN][vV]([.][^/]*)?|[.][sS][sS][hH]|[.][aA][wW][sS]|[.][gG][nN][uU][pP][gG]|[.][cC][oO][dD][eE][yY]|[.][pP][iI]|[.][nN][eE][tT][rR][cC]|[.][nN][pP][mM][rR][cC]|[^/]+[.][pP][eE][mM]|[^/]+[.][kK][eE][yY]|[iI][dD]_[^/]+|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]([.][jJ][sS][oO][nN])?)(/|$)"))
+; No network or general IPC rule is present.

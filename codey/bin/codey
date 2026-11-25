@@ -21,6 +21,23 @@ if [[ "${1:-}" == sandbox ]]; then
   exec node "$REPO_DIR/codey/sandbox.mjs" "$@"
 fi
 
+HAS_MACOS_SANDBOX=
+for ARG in "$@"; do
+  case "$ARG" in
+    --) break ;;
+    --sandbox|--sandbox=*) HAS_MACOS_SANDBOX=1; break ;;
+  esac
+done
+if [[ -n "$HAS_MACOS_SANDBOX" ]]; then
+  if [[ "${0##*/}" == codey-t3 ]]; then
+    printf '%s\n' 'Codey: the macOS sandbox is available only in the Codey terminal.' >&2
+    exit 1
+  fi
+  unset NODE_OPTIONS NODE_PATH
+  RESOLVER_URL="$(node -p 'require("node:url").pathToFileURL(process.argv[1]).href' "$REPO_DIR/packages/coding-agent/src/experimental/source-resolver.ts")"
+  exec node --import "$RESOLVER_URL" "$REPO_DIR/codey/sandbox/macos/terminal.mjs" "$@"
+fi
+
 # Explicit Codey overrides win; existing Pi overrides remain opt-in shared state.
 export PI_CODING_AGENT_DIR="${CODEY_CODING_AGENT_DIR:-${PI_CODING_AGENT_DIR:-$HOME/.codey/agent}}"
 if [[ -n "${CODEY_CODING_AGENT_SESSION_DIR:-}" ]]; then

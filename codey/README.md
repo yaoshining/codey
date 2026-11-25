@@ -115,6 +115,8 @@ Commit your task changes before running `/review main` to review the branch. Che
 
 Use `codey sandbox` to start an isolated Codey terminal from a selected Git commit. See the [offline sandbox guide](sandbox/README.md) for the image build, dry run, retained results and integration check.
 
+On macOS, `codey --sandbox workspace-write` opens a separate terminal session using the current files. See the [macOS sandbox guide](sandbox/macos/README.md) for compatibility and tool boundaries.
+
 ## Review changes
 
 In an interactive Codey session, run `/review` to review the repository's staged, unstaged and untracked changes. Run `/review main` or `/review origin/main` to review only committed changes from the merge base with that local or remote-tracking branch to HEAD. Staged, unstaged and untracked changes are excluded in branch mode. Codey uses the refs already on disk.
