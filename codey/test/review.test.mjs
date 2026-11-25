@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -10,7 +12,7 @@ const checkout = fileURLToPath(new URL("../..", import.meta.url));
 const entry = realpathSync(process.env.CODEY_TEST_BIN ?? join(checkout, "codey/bin/codey"));
 const runtime = resolve(dirname(entry), "../..");
 
-test("Codey RPC exposes /review and reviews only bounded Git input without tools or worktree writes", (t) => {
+test("Codey RPC exposes /review and reviews only bounded Git input without tools or worktree writes", async (t) => {
 	const temporary = mkdtempSync(join(realpathSync(tmpdir()), "codey-review-"));
 	t.after(() => rmSync(temporary, { recursive: true, force: true }));
 	const cwd = join(temporary, "repo");
@@ -46,17 +48,10 @@ test("Codey RPC exposes /review and reviews only bounded Git input without tools
 	git("config", "filter.fixture.clean", "false");
 	git("config", "filter.fixture.required", "true");
 	const snapshot = () =>
-		[
-			"tracked.txt",
-			"new.txt",
-			"ignored.txt",
-			".gitattributes",
-			".git/index",
-			"oversized-staged.txt",
-			"oversized-untracked.txt",
-		]
-			.filter((path) => existsSync(join(cwd, path)))
-			.map((path) => readFileSync(join(cwd, path)).toString("base64"));
+		[...readdirSync(cwd).filter((path) => path !== ".git").sort(), ".git/index"].map((path) => [
+			path,
+			readFileSync(join(cwd, path)).toString("base64"),
+		]);
 
 	writeFileSync(
 		join(agent, "models.json"),
@@ -90,24 +85,45 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 };
 `,
 	);
-	const rpc = (request, flags = []) => {
-		const result = spawnSync(entry, ["--mode", "rpc", "--no-session", "--no-mcp", "--no-approve", ...flags], {
+	const rpc = async (request, flags = []) => {
+		const child = spawn(entry, ["--mode", "rpc", "--no-session", "--no-mcp", "--no-approve", ...flags], {
 			cwd,
 			timeout: 30_000,
-			encoding: "utf8",
-			input: JSON.stringify({ id: "test", ...request }) + "\n",
 			env: {
 				...env,
 				PI_SKIP_VERSION_CHECK: "1",
 				NODE_OPTIONS: `--import=${source("packages/coding-agent/src/experimental/source-resolver.ts")} --import=${pathToFileURL(mock).href}`,
 			},
 		});
-		assert.ifError(result.error);
-		assert.equal(result.status, 0, result.stderr);
-		return result.stdout;
+		const closed = once(child, "close");
+		let stderr = "";
+		child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+		const lines = createInterface({ input: child.stdout });
+		const output = [];
+		child.stdin.write(JSON.stringify({ id: "test", ...request }) + "\n");
+		try {
+			for await (const line of lines) {
+				output.push(line);
+				const event = JSON.parse(line);
+				if (event.type === "response" && event.id === "test") break;
+			}
+		} finally {
+			child.stdin.end();
+			const [status] = await closed;
+			assert.equal(status, 0, stderr);
+		}
+		assert.ok(output.some((line) => JSON.parse(line).id === "test"), stderr);
+		return output.join("\n");
 	};
-	assert.match(rpc({ type: "get_commands" }), /"name":"review"/);
-	assert.doesNotMatch(rpc({ type: "get_commands" }, ["--no-extensions"]), /"name":"review"/);
+	assert.match(await rpc({ type: "get_commands" }), /"name":"review"/);
+	assert.doesNotMatch(await rpc({ type: "get_commands" }, ["--no-extensions"]), /"name":"review"/);
+	const reviewEntries = (output) =>
+		output
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line))
+			.filter(({ type, entry }) => type === "entry_appended" && entry.customType === "codey-review")
+			.map(({ entry }) => entry.data);
 	for (const [command, includesCommitted] of [
 		["/review", false],
 		["/review main", true],
@@ -119,12 +135,16 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 			write("tracked.txt", "oversized unstaged\n".repeat(5000));
 		}
 		const beforeReview = snapshot();
-		const output = rpc({ type: "prompt", message: command });
+		const output = await rpc({ type: "prompt", message: command });
 		assert.deepEqual(snapshot(), beforeReview);
-		assert.match(output, /P2 tracked.txt:1 Fixture finding/);
-		assert.match(output, /"method":"notify"/);
+		const scope = includesCommitted ? "commits since merge base with main" : "current changes";
+		assert.deepEqual(reviewEntries(output), [
+			{ phase: "started", text: `>> Code review started: ${scope} <` },
+			{ phase: "report", text: "P2 tracked.txt:1 Fixture finding" },
+			{ phase: "finished", text: "<< Code review finished >>" },
+		]);
 		assert.doesNotMatch(output, /"type":"message_end"/);
-		assert.match(output, includesCommitted ? /commits since merge base with main/ : /uncommitted changes/);
+		assert.match(output, /"disposition":"handled"/);
 		const { context, maxTokens } = JSON.parse(readFileSync(log, "utf8"));
 		assert.deepEqual(context.tools, []);
 		assert.equal(maxTokens, 4096);
@@ -145,7 +165,16 @@ ModelRegistry.prototype.complete = async function (model, context, options) {
 		assert.doesNotMatch(content, /DO_NOT_SEND_THIS/);
 	}
 	rmSync(log);
-	assert.match(rpc({ type: "prompt", message: "/review missing-base" }), /No local or remote-tracking branch/);
+	const invalid = reviewEntries(await rpc({ type: "prompt", message: "/review missing-base" }));
+	assert.deepEqual(invalid.map(({ phase }) => phase), ["started", "report", "finished"]);
+	assert.match(invalid[1].text, /No local or remote-tracking branch/);
+	const oversized = reviewEntries(await rpc({ type: "prompt", message: "/review" }));
+	assert.deepEqual(oversized.map(({ phase }) => phase), ["started", "report", "finished"]);
+	assert.match(oversized[1].text, /64 KiB review limit/);
+	const bypass = await rpc({ type: "prompt", message: "/review\tmain" });
+	assert.match(bypass, /Submit \/review \[base-branch\] as a slash command/);
+	assert.match(bypass, /"disposition":"handled"/);
+	assert.doesNotMatch(bypass, /"type":"agent_start"/);
 	assert.equal(existsSync(log), false);
 	assert.equal(existsSync(join(cwd, "unexpected.txt")), false);
 });
