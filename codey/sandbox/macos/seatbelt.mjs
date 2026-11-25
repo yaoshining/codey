@@ -83,7 +83,7 @@ function runSeatbelt({ workspace, node, params, env, name, args, signal }) {
 	if (signal?.aborted) throw new Error("Operation cancelled.");
 	const child = spawn(backend, [
 		"-f", profile, ...Object.entries(params).flatMap(([key, value]) => ["-D", `${key}=${value}`]),
-		node, "--import", resolver, worker,
+		node, "--jitless", "--import", resolver, worker,
 	], { cwd: workspace, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
 	return new Promise((resolveResult, reject) => {
 		const out = [], err = [];
@@ -109,11 +109,15 @@ function runSeatbelt({ workspace, node, params, env, name, args, signal }) {
 		}
 		child.on("error", (error) => { failure ??= error; });
 		child.stdin.on("error", () => {});
-		child.on("close", (code) => {
+		child.on("close", (code, exitSignal) => {
 			clearTimeout(timeout);
 			signal?.removeEventListener("abort", cancel);
 			if (failure) return reject(failure);
-			if (code !== 0) return reject(new Error(Buffer.concat(err).toString().trim() || `Seatbelt worker exited with status ${code}.`));
+			if (code !== 0) {
+				const status = exitSignal ? `signal ${exitSignal}` : `status ${code}`;
+				const diagnostics = Buffer.concat(err).toString().trim();
+				return reject(new Error(`Seatbelt worker exited with ${status}.${diagnostics ? ` ${diagnostics}` : ""}`));
+			}
 			try {
 				const result = JSON.parse(Buffer.concat(out).toString());
 				if (result.error) throw new Error(result.error);
