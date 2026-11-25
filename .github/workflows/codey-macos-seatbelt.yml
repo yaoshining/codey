@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 01624c83f28e3d86aba87aaa524097e9bbdabde6
+          ref: 17b70d4c0ab3d9e91e11aeef3175c4767e72c667
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -41,4 +41,25 @@ jobs:
       - name: Read Seatbelt diagnostics if the check failed
         if: failure()
         run: |
-          /usr/bin/log show --last 3m --style compact --predicate 'eventMessage CONTAINS[c] "sandbox" AND (eventMessage CONTAINS[c] "node" OR eventMessage CONTAINS[c] "codey-sandbox")' | tail -n 80
+          /usr/bin/log show --last 3m --info --debug --style compact --predicate 'eventMessage CONTAINS[c] "sandbox" AND (eventMessage CONTAINS[c] "node" OR eventMessage CONTAINS[c] "codey-sandbox")' | tail -n 80
+          report="$(find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'node-*.ips' -mmin -4 -print 2>/dev/null | head -n 1)"
+          if [[ -n "$report" ]]; then
+            sed '1d' "$report" | jq -c '{termination,exception,asi,faultingThread,frames:.threads[.faultingThread].frames[:12]}'
+          fi
+          test_dir="$(mktemp -d)"
+          node_path="$(node -p 'process.execPath')"
+          test_dir="$(cd "$test_dir" && pwd -P)"
+          for kind in sh node; do
+            if [[ "$kind" == sh ]]; then
+              probe=(/bin/sh -c 'printf "shell starts\\n"')
+            else
+              probe=("$node_path" --jitless -e 'console.log("node starts")')
+            fi
+            if /usr/bin/env -i PATH=/usr/bin:/bin HOME="$test_dir" TMPDIR="$test_dir" /usr/bin/sandbox-exec \
+              -f "$PWD/codey/sandbox/macos/profile.sbpl" -D "WORKSPACE=$test_dir" -D "SCRATCH=$test_dir" \
+              -D "INSTALL=$PWD" -D "NODE=$node_path" -D "TOOLCHAIN=/dev/null" -D "TOOLCHAIN_LINKS=/dev/null" "${probe[@]}"; then
+              echo "Probe passed: $kind"
+            else
+              echo "Probe failed: $kind, status $?"
+            fi
+          done
