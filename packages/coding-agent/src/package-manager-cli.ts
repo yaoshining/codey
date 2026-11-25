@@ -832,6 +832,7 @@ function prepareWindowsNpmSelfUpdate(): void {
 
 export interface PackageCommandRuntimeOptions {
 	commandName?: string;
+	projectTrustDescription?: string;
 	extensionFactories?: InlineExtension[];
 }
 
@@ -853,6 +854,7 @@ function reportProjectTrustWarnings(warnings: readonly string[]): void {
 async function createCommandSettingsManager(options: {
 	cwd: string;
 	commandName?: string;
+	projectTrustDescription?: string;
 	agentDir: string;
 	projectTrustOverride?: boolean;
 	useSavedProjectTrustOnly?: boolean;
@@ -885,6 +887,7 @@ async function createCommandSettingsManager(options: {
 		cwd: options.cwd,
 		trustStore,
 		commandName: options.commandName,
+		projectTrustDescription: options.projectTrustDescription,
 		trustOverride: options.projectTrustOverride,
 		defaultProjectTrust: settingsManager.getDefaultProjectTrust(),
 		extensionsResult,
@@ -943,6 +946,7 @@ export async function handleConfigCommand(
 		cwd,
 		commandName,
 		agentDir,
+		projectTrustDescription: runtimeOptions.projectTrustDescription,
 		projectTrustOverride,
 		extensionFactories: runtimeOptions.extensionFactories,
 	});
@@ -1058,6 +1062,7 @@ export async function handlePackageCommand(
 		cwd,
 		commandName,
 		agentDir,
+		projectTrustDescription: runtimeOptions.projectTrustDescription,
 		projectTrustOverride: options.projectTrustOverride,
 		useSavedProjectTrustOnly: options.command === "update",
 		extensionFactories: runtimeOptions.extensionFactories,
