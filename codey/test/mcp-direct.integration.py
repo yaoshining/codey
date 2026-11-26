@@ -17,6 +17,7 @@ import pexpect
 
 fixtures = runpy.run_path(str(Path(__file__).with_name("mcp-bridge-oauth.integration.py")))
 OAuth = fixtures["OAuth"]
+openssl = os.environ.get("CODEY_TEST_OPENSSL", "/usr/bin/openssl")
 
 
 class Direct(OAuth):
@@ -47,7 +48,7 @@ class Direct(OAuth):
 def certificate(root, name, san):
     key, cert, config = (root / (name + suffix) for suffix in (".key", ".pem", ".cnf"))
     config.write_text(f"[req]\ndistinguished_name=dn\n[dn]\n[fixture]\nsubjectAltName={san}\n")
-    subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                     "-subj", f"/CN={name}", "-config", str(config), "-extensions", "fixture",
                     "-keyout", str(key), "-out", str(cert)], check=True, capture_output=True)
     return cert, key
@@ -71,10 +72,10 @@ basicConstraints=critical,CA:FALSE
 """)
     serial.write_text("01\n")
     database.touch()
-    subprocess.run(["/usr/bin/openssl", "req", "-new", "-key", str(key), "-subj", f"/CN={name}",
+    subprocess.run([openssl, "req", "-new", "-key", str(key), "-subj", f"/CN={name}",
                     "-out", str(request)], check=True, capture_output=True)
     validity = ["-startdate", "20000101000000Z", "-enddate", "20010101000000Z"] if self_signed else ["-days", "1"]
-    subprocess.run(["/usr/bin/openssl", "ca", "-batch", "-notext", "-config", str(config), "-extensions", "leaf",
+    subprocess.run([openssl, "ca", "-batch", "-notext", "-config", str(config), "-extensions", "leaf",
                     "-cert", str(issuer_cert), "-keyfile", str(issuer_key), "-in", str(request), "-out", str(cert),
                     *validity, *(["-selfsign"] if self_signed else [])], check=True, capture_output=True)
     return cert
@@ -102,12 +103,12 @@ def run(binary):
         replacement, replacement_key = certificate(root, "replacement", "IP:127.0.0.1,DNS:localhost")
         wrong, wrong_key = certificate(root, "wrong", "DNS:localhost")
         renewed = root / "renewed.pem"
-        subprocess.run(["/usr/bin/openssl", "req", "-x509", "-key", str(key), "-days", "1", "-set_serial", "42",
+        subprocess.run([openssl, "req", "-x509", "-key", str(key), "-days", "1", "-set_serial", "42",
                         "-subj", "/CN=fixture", "-config", str(root / "fixture.cnf"), "-extensions", "fixture",
                         "-out", str(renewed)], check=True, capture_output=True)
         expired = dated_leaf(root, "fixture", key, cert, key, self_signed=True)
         issued = dated_leaf(root, "issued", replacement_key, cert, key)
-        fingerprint = subprocess.check_output(["/usr/bin/openssl", "x509", "-in", str(cert),
+        fingerprint = subprocess.check_output([openssl, "x509", "-in", str(cert),
                                                "-noout", "-sha256", "-fingerprint"], text=True).strip().split("=", 1)[1]
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.load_cert_chain(cert, key)
