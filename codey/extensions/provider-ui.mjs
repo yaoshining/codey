@@ -38,22 +38,40 @@ function providerInput(ui, title, { initial = "", secret = false } = {}) {
 	}, { blocked: { kind: "question", message: title } });
 }
 
-function picker(ui, catalog, selected) {
+function picker(ui, catalog, selected, catalogStatus) {
 	return ui.custom((tui, _theme, keys, done) => {
 		const filter = new Input({ prompt: "Search: " });
 		const chosen = new Set(selected);
+		const names = catalog.map((id) => id.toLowerCase());
 		let cursor = 0;
+		let query;
+		let results = catalog;
+		let selectionLimit = false;
 		const rows = 8;
-		const matching = () => catalog.filter((id) => id.toLowerCase().includes(filter.getValue().toLowerCase()));
+		const matching = () => {
+			const input = filter.getValue();
+			if (input === query) return results;
+			query = input;
+			const needle = input.toLowerCase();
+			const exact = [], prefix = [], substring = [];
+			for (const [index, name] of names.entries()) {
+				if (name === needle) exact.push(catalog[index]);
+				else if (name.startsWith(needle)) prefix.push(catalog[index]);
+				else if (name.includes(needle)) substring.push(catalog[index]);
+			}
+			results = [...exact, ...prefix, ...substring];
+			return results;
+		};
 		const hint = (id) => keys.getKeys(id).join("/");
 		return {
 			invalidate() {},
 			render(width) {
 				const filtered = matching();
 				const first = Math.max(0, cursor - rows + 1);
-				const lines = ["Select catalog models", ...filter.render(width), ...filtered.slice(first, first + rows)
+				const lines = ["Select catalog models", ...(catalogStatus ? [catalogStatus] : []), ...filter.render(width), ...filtered.slice(first, first + rows)
 					.map((id, index) => `${index + first === cursor ? ">" : " "} [${chosen.has(id) ? "x" : " "}] ${id}`),
-					`${chosen.size} selected · ${hint("tui.select.confirm")} toggle · ${hint("app.models.save")} done · ${hint("tui.select.cancel")} back`];
+					`${chosen.size} selected · ${hint("tui.select.confirm")} toggle · ${hint("app.models.save")} done · ${hint("tui.select.cancel")} back`,
+					...(selectionLimit ? ["Up to 500 models can be saved per provider."] : [])];
 				return lines.map((line) => truncateToWidth(line, width));
 			},
 			handleInput(data) {
@@ -64,7 +82,8 @@ function picker(ui, catalog, selected) {
 				else if (keys.matches(data, "tui.select.down")) cursor = Math.max(0, Math.min(filtered.length - 1, cursor + 1));
 				else if (keys.matches(data, "tui.select.confirm")) {
 					const id = filtered[cursor];
-					if (id && !chosen.delete(id)) chosen.add(id);
+					selectionLimit = Boolean(id && !chosen.has(id) && chosen.size >= 500);
+					if (id && !selectionLimit && !chosen.delete(id)) chosen.add(id);
 				} else {
 					filter.handleInput(data);
 					cursor = 0;
@@ -78,9 +97,12 @@ function picker(ui, catalog, selected) {
 async function chooseModels(ui, initial, profile) {
 	let selected = [...initial];
 	let catalog = [];
+	let discovery;
+	let catalogStatus = "";
 	for (;;) {
-		const action = await ui.select(`Models for ${providerLabel(profile)} (${selected.length} selected)`, [
-			"Discover via the model catalog", ...(catalog.length ? ["Search and select discovered models"] : []),
+		const action = await ui.select(`Models for ${providerLabel(profile)} (${selected.length} selected)${catalogStatus ? `\n${catalogStatus}` : ""}`, [
+			"Discover via the model catalog", ...(discovery?.continuation ? ["Continue loading model catalog"] : []),
+			...(catalog.length ? ["Search and select discovered models"] : []),
 			"Enter model IDs manually", "Keep selections and continue",
 		]);
 		if (action === undefined) return undefined;
@@ -99,13 +121,19 @@ async function chooseModels(ui, initial, profile) {
 			}
 			selected = [...new Set(ids)];
 		} else {
-			if (action === "Discover via the model catalog") {
-				if (!profile.lanHttpApprovedUrl && !await ui.confirm("Request the model catalog?", `${profile.baseUrl}${protocols.get(profile.api).catalog}\nAuthentication: ${authentication.get(profile.auth).label}. No inference request will be sent.`)) continue;
-				const result = await discoverModels(profile);
-				catalog = result.ids.filter((id) => !profile.key || !id.includes(profile.key));
-				if (result.reason) ui.notify(`${result.reason} You can enter model IDs manually.`, "warning");
+			if (action === "Discover via the model catalog" || action === "Continue loading model catalog") {
+				const resume = action === "Continue loading model catalog";
+				if (!resume && !profile.lanHttpApprovedUrl && !await ui.confirm("Request the model catalog?", `${profile.baseUrl}${protocols.get(profile.api).catalog}\nAuthentication: ${authentication.get(profile.auth).label}. No inference request will be sent.`)) continue;
+				discovery = await discoverModels(profile, resume ? discovery.continuation : undefined);
+				catalog = discovery.ids;
+				catalogStatus = discovery.partial ? `Only ${catalog.length} model IDs loaded.` : "";
+				if (discovery.reason) {
+					ui.notify(`${catalogStatus ? `${catalogStatus} ` : ""}${discovery.reason} You can enter model IDs manually.`, "warning");
+				}
+				// Leave the action menu visible when more pages can be loaded.
+				if (discovery.continuation) continue;
 			}
-			if (catalog.length) selected = await picker(ui, catalog, selected) ?? selected;
+			if (catalog.length) selected = await picker(ui, catalog, selected, catalogStatus) ?? selected;
 		}
 	}
 }

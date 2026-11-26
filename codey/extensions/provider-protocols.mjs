@@ -99,6 +99,12 @@ export function providerFromProfile(profile) {
 	};
 }
 
+const maxCatalogPageBytes = 16 * 1024 * 1024;
+const maxCatalogBatchBytes = 48 * 1024 * 1024;
+const maxCatalogBatchPages = 64;
+const maxCatalogPages = 1024;
+const maxCatalogIds = 50_000;
+
 async function boundedJson(response) {
 	const reader = response.body?.getReader();
 	if (!reader) throw new Error("The response had no model catalog.");
@@ -106,13 +112,15 @@ async function boundedJson(response) {
 	const chunks = [];
 	try {
 		for (;;) {
-			const { done, value } = await reader.read();
+			const { done, value } = await reader.read().catch(() => {
+				throw Object.assign(new Error("The catalog response was interrupted."), { code: "CODEY_CATALOG_INTERRUPTED" });
+			});
 			if (done) break;
 			size += value.length;
-			if (size > 512 * 1024) throw new Error("A model catalog page exceeded 512 KiB.");
+			if (size > maxCatalogPageBytes) throw new Error("A model catalog page exceeded the 16 MiB safety limit.");
 			chunks.push(value);
 		}
-		try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new Error("The endpoint did not return a JSON model catalog."); }
+		try { return { data: JSON.parse(Buffer.concat(chunks).toString("utf8")), size }; } catch { throw new Error("The endpoint did not return a JSON model catalog."); }
 	} finally {
 		await reader.cancel().catch(() => {});
 	}
@@ -122,39 +130,53 @@ export function validModelId(value) {
 	return typeof value === "string" && value.trim().length > 0 && value.length <= 256 && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
 }
 
-export async function discoverModels(profile) {
+export async function discoverModels(profile, previous) {
 	const policy = authorizedProviderEndpoint(profile);
 	const endpoint = new URL(policy.baseUrl + protocols.get(profile.api).catalog);
-	const seen = new Set();
-	const ids = new Set();
-	const signal = AbortSignal.timeout(8_000);
-	let page = endpoint;
+	const { ids, seen } = previous ?? { ids: new Set(), seen: new Set() };
+	const signal = AbortSignal.timeout(25_000);
+	let page = previous?.page ?? endpoint;
+	let remaining = maxCatalogBatchPages;
+	let batchBytes = 0;
+	let retryable = false;
+	const partial = (reason, resume) => ({
+		ids: [...ids], reason, partial: true,
+		continuation: resume ? { ids, seen, page } : undefined,
+	});
 	try {
 		while (page) {
+			retryable = false;
 			if (page.origin !== endpoint.origin || page.pathname !== endpoint.pathname || page.username || page.password || page.hash) {
 				throw new Error("Catalog pagination attempted to leave the approved endpoint.");
 			}
+			if (page.href.length > 8192) throw new Error("The next model catalog page URL is too long.");
 			if (seen.has(page.href)) throw new Error("Catalog pagination repeated a page.");
-			if (seen.size >= 10) throw new Error("Stopped after 10 model catalog pages.");
-			seen.add(page.href);
+			if (seen.size >= maxCatalogPages) return partial("The catalog exceeded the 1,024-page safety limit.", false);
+			if (remaining-- === 0 || batchBytes >= maxCatalogBatchBytes) return partial("More catalog pages are available.", true);
 			let response;
 			try { response = await fetchProvider(page, { headers: headersFor(profile), redirect: "manual", signal }, policy); } catch (error) {
 				if (error.code === "CODEY_LAN_HTTP_ADDRESS") throw error;
-				throw new Error(signal.aborted ? "Model discovery timed out." : "Model discovery could not connect. Check the URL, network and TLS certificate.");
+				retryable = true;
+				throw new Error("Model discovery could not connect. Check the URL, network and TLS certificate.");
 			}
 			if (!response.ok) {
 				await response.body?.cancel().catch(() => {});
 				if (response.status >= 300 && response.status < 400) throw new Error("The catalog redirected. Use the final Base URL.");
 				if (response.status === 401 || response.status === 403) throw new Error(`Catalog authentication was rejected (HTTP ${response.status}).`);
 				if ([404, 405, 501].includes(response.status)) throw new Error(`The endpoint does not expose this model catalog (HTTP ${response.status}).`);
+				retryable = response.status === 408 || response.status === 429 || response.status >= 500;
 				throw new Error(`Model discovery returned HTTP ${response.status}.`);
 			}
-			const data = await boundedJson(response);
+			const { data, size } = await boundedJson(response);
+			batchBytes += size;
 			if (!Array.isArray(data?.data)) throw new Error("The endpoint did not return a supported model catalog.");
 			for (const entry of data.data) {
-				if (validModelId(entry?.id)) ids.add(entry.id);
-				if (ids.size >= 500) throw new Error("Stopped after 500 distinct model IDs.");
+				const id = entry?.id;
+				if (!validModelId(id) || (profile.key && id.includes(profile.key)) || ids.has(id)) continue;
+				if (ids.size === maxCatalogIds) return partial("The catalog exceeded the 50,000-ID safety limit.", false);
+				ids.add(id);
 			}
+			seen.add(page.href);
 			const next = data.next ?? /<([^>]+)>;\s*rel="?next"?(?:[,;\s]|$)/i.exec(response.headers.get("link") ?? "")?.[1];
 			if (typeof next === "string" && next) {
 				try { page = new URL(next, page); } catch { throw new Error("The next model catalog page URL is invalid."); }
@@ -167,6 +189,7 @@ export async function discoverModels(profile) {
 		}
 		return { ids: [...ids], reason: ids.size ? undefined : "The catalog returned no model IDs." };
 	} catch (error) {
-		return { ids: [...ids], reason: signal.aborted ? "Model discovery timed out." : error.name === "Error" ? error.message : "The model catalog response could not be read." };
+		return partial(signal.aborted ? "Model discovery timed out." : error.name === "Error" ? error.message : "The model catalog response could not be read.",
+			signal.aborted || retryable || error.code === "CODEY_CATALOG_INTERRUPTED");
 	}
 }

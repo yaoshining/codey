@@ -10,7 +10,9 @@
 
 名称可用 ASCII 大小写字母，最多 40 个字符，以字母开头，后续可用字母、数字、连字符和下划线。例如，输入 `LiteLLM` 会保留显示名，内部 ID 为 `litellm`。`/provider` 会显示名称和 ID，`/model` 的模型标签可以显示 `LiteLLM/模型ID`，服务商徽标仍显示内部 ID。文件名、默认模型设置和 `codey --provider litellm` 使用小写 ID。大小写写法共用同一个 ID，已被自定义服务商、内置服务商或已保存登录占用的 ID 无法再次添加。
 
-可以选择 **Discover via the model catalog** 并确认一次目录请求。结果支持搜索和多选，屏幕底部显示切换选中与完成的快捷键。列表只表示目录公布的模型 ID。端点没有目录、目录请求失败或想追加别名时，选择 **Enter model IDs manually**，填单个 ID 或 JSON 数组，例如 `["model-a", "model-b"]`。向导不会发送聊天请求。保存后用 `/model` 选择；若目录还在刷新，可执行一次 `/reload`。
+可以选择 **Discover via the model catalog** 读取模型目录。向导会沿同一目录地址分页并去重，无需选中所有模型。搜索会先显示完整 ID 匹配，再显示前缀和其他包含匹配。目录只表示网关公布的模型 ID。遇到请求中断或保护上限时，会标明已加载条数；若能从断点继续，选择 **Continue loading model catalog**，也可从头重试。一次最多保存 500 个选中的模型。
+
+端点没有目录、目录请求失败或想追加别名时，选择 **Enter model IDs manually**，填单个 ID 或 JSON 数组，例如 `["model-a", "model-b"]`。向导不会发送聊天请求。保存后用 `/model` 选择；若目录还在刷新，可执行一次 `/reload`。
 
 用 **Edit provider or models** 修改端点、协议、认证或模型列表，用 **Replace API key** 换密钥。端点或协议变更时，填入新连接的密钥。保存前会显示修改范围，取消时不会写入。向导管理的配置和掩码录入的密钥保存在默认宿主目录 `~/.codey/agent/custom-providers/`，其中每个文件只供当前用户访问。`models.json` 和 `/login` 的标准凭据文件照旧。使用 `/provider` 管理这些连接的密钥。
 
