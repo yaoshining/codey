@@ -63,21 +63,15 @@ export async function hostModel(home, workspace, hostDir) {
 	const agentDir = join(codey, "agent");
 	for (const path of [codey, agentDir]) {
 		const stat = lstatSync(path, { throwIfNoEntry: false });
-		if (stat && (!stat.isDirectory() || !contains(home, realpathSync(path)) || contains(workspace, realpathSync(path)))) {
+		if (stat && (!stat.isDirectory() || !contains(home, realpathSync(path)) ||
+			(workspace !== undefined && contains(workspace, realpathSync(path))))) {
 			throw new Error("The host Codey configuration must be a directory outside the workspace.");
 		}
 	}
 	const authPath = join(agentDir, "auth.json");
-	parseData(readOptional(authPath), "auth.json");
-	const auth = new FileAuthStorageBackend(authPath);
-	const checked = (callback) => (raw) => {
-		parseData(raw, "auth.json");
-		return callback(raw);
-	};
-	const credentials = AuthStorage.fromStorage({
-		withLock: (callback) => auth.withLock(checked(callback)),
-		withLockAsync: (callback, options) => auth.withLockAsync(checked(callback), options),
-	});
+	const authData = parseData(readOptional(authPath), "auth.json");
+	// Discovery has no workspace and must not create, lock or write host credentials.
+	const credentials = workspace === undefined ? AuthStorage.inMemory(authData) : lockedCredentials(authPath);
 	const rawModels = readOptional(join(agentDir, "models.json"));
 	let modelsPath = null;
 	if (rawModels !== undefined) {
@@ -110,4 +104,16 @@ export async function hostModel(home, workspace, hostDir) {
 		}
 	} catch { warnings.push("Could not load the private Codey provider directory."); }
 	return { runtime, agentDir, settings, warning: warnings.join("\n") || undefined };
+}
+
+function lockedCredentials(authPath) {
+	const auth = new FileAuthStorageBackend(authPath);
+	const checked = (callback) => (raw) => {
+		parseData(raw, "auth.json");
+		return callback(raw);
+	};
+	return AuthStorage.fromStorage({
+		withLock: (callback) => auth.withLock(checked(callback)),
+		withLockAsync: (callback, options) => auth.withLockAsync(checked(callback), options),
+	});
 }

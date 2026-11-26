@@ -1,5 +1,8 @@
 // ACP v1 over stdio. Protocol input never grants workspace, network, or tool permissions.
 import { basename, isAbsolute } from "node:path";
+import { randomUUID } from "node:crypto";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { DEFAULT_THINKING_LEVEL } from "../../../packages/coding-agent/src/core/defaults.ts";
 import { codeyVersion } from "../../version.mjs";
 import { readFrames } from "./jsonl.mjs";
 import { SandboxRpcResumeError, sandboxAcpSessions } from "./rpc-sessions.mjs";
@@ -20,6 +23,63 @@ const select = (id, name, category, currentValue, options) => ({ id, name, categ
 const modelId = (model) => `${model.provider}/${model.id}`;
 const textContent = (text) => ({ type: "text", text });
 
+function configOptions(model, thinking, models) {
+	if (!model) return [];
+	return [
+		select("model", "Model", "model", modelId(model), models.map((item) => ({ value: modelId(item), name: item.name }))),
+		select("thinking", "Thinking", "thought_level", thinking,
+			getSupportedThinkingLevels(model).map((level) => ({ value: level, name: level }))),
+	];
+}
+
+function setupDiscovery(models, initialModel, defaultThinking) {
+	// Keep only metadata and an ephemeral ID. The probe has no AgentSession or workspace handle.
+	const catalog = models.map((model) => ({
+		id: modelId(model),
+		levels: getSupportedThinkingLevels(model),
+		thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
+		name: model.name,
+	}));
+	const byId = new Map(catalog.map((item) => [item.id, item]));
+	let state;
+	const options = () => ({ configOptions: [
+		select("model", "Model", "model", state.model.id, catalog.map(({ id, name }) => ({ value: id, name }))),
+		select("thinking", "Thinking", "thought_level", state.thinking,
+			state.model.levels.map((level) => ({ value: level, name: level }))),
+	] });
+	return (method, params) => {
+		switch (method) {
+			case "session/new": {
+				if (typeof params.cwd !== "string" || !isAbsolute(params.cwd) ||
+					!Array.isArray(params.mcpServers) || params.mcpServers.length ||
+					(params.additionalDirectories !== undefined &&
+						(!Array.isArray(params.additionalDirectories) || params.additionalDirectories.length))) {
+					throw new RequestError("Model discovery cannot use MCP servers or additional workspace directories.");
+				}
+				const model = (initialModel && byId.get(modelId(initialModel))) ?? catalog[0];
+				if (!model) throw new RequestError("No model available. Sign in with /login in ordinary Codey and refresh this provider.", -32000);
+				state = { id: randomUUID(), model, thinking: model.thinking };
+				return { sessionId: state.id, ...options() };
+			}
+			case "session/set_config_option": {
+				if (!state || params.sessionId !== state.id) throw new RequestError("Unknown Codey ACP discovery session.");
+				if (params.configId === "model" && byId.has(params.value)) {
+					state.model = byId.get(params.value);
+					state.thinking = state.model.thinking;
+				} else if (params.configId === "thinking" && state.model.levels.includes(params.value)) {
+					state.thinking = params.value;
+				} else throw new RequestError("Configuration option or value is unavailable.");
+				return options();
+			}
+			case "session/delete":
+				if (!state || params.sessionId !== state.id) throw new RequestError("Unknown Codey ACP discovery session.");
+				state = undefined;
+				return {};
+			default: throw new RequestError("Model discovery cannot run prompts or tools. Open a project chat to use the sandbox.", -32601);
+		}
+	};
+}
+
 function promptText(blocks) {
 	if (!Array.isArray(blocks) || !blocks.length) throw new RequestError("A prompt must contain text.");
 	const text = blocks.map((block) => {
@@ -37,11 +97,13 @@ function promptText(blocks) {
 	return text;
 }
 
-export async function runSandboxAcp({ workspace, home, runtime, model, createSession, wireWrite,
+export async function runSandboxAcp({ home, prepare, wireWrite,
 	input = process.stdin, stdout = process.stdout }) {
-	const open = sandboxAcpSessions(home, workspace);
+	const startup = new AbortController();
 	let initialized = false;
 	let closing = false;
+	let discovery;
+	let workspace, runtime, model, createSession, open;
 	let active;
 	let pending;
 	let turn;
@@ -50,6 +112,7 @@ export async function runSandboxAcp({ workspace, home, runtime, model, createSes
 	function disconnect() {
 		if (closing) return;
 		closing = true;
+		startup.abort();
 		input.destroy();
 		cancel();
 	}
@@ -74,13 +137,7 @@ export async function runSandboxAcp({ workspace, home, runtime, model, createSes
 	}
 
 	function config(session) {
-		const chosen = session.model;
-		if (!chosen) return [];
-		return [
-			select("model", "Model", "model", modelId(chosen), available().map((item) => ({ value: modelId(item), name: item.name }))),
-			select("thinking", "Thinking", "thought_level", session.thinkingLevel,
-				session.getAvailableThinkingLevels().map((level) => ({ value: level, name: level }))),
-		];
+		return configOptions(session.model, session.thinkingLevel, available());
 	}
 
 	function checkedSession(params) {
@@ -190,13 +247,27 @@ export async function runSandboxAcp({ workspace, home, runtime, model, createSes
 				throw new RequestError("Codey supports ACP protocol version 1.");
 			}
 			initialized = true;
+			// The client name only selects fewer capabilities for the lifetime of this process.
+			const metadataOnly = params.clientInfo?.name === "t3-code-provider-test";
+			const prepared = await prepare(metadataOnly, startup.signal);
+			startup.signal.throwIfAborted();
+			if (metadataOnly) {
+				discovery = setupDiscovery(prepared.runtime.getAvailableSnapshot(), prepared.model, prepared.defaultThinkingLevel);
+			} else {
+				({ workspace, runtime, model, createSession } = prepared);
+				open = sandboxAcpSessions(home, workspace);
+			}
 			return {
 				protocolVersion: 1, agentInfo: { name: "codey", title: "Codey", version: codeyVersion },
-				agentCapabilities: { loadSession: true, promptCapabilities: { image: false, audio: false, embeddedContext: false } },
+				agentCapabilities: metadataOnly ? { loadSession: false, sessionCapabilities: { delete: {} } } : {
+					loadSession: true, promptCapabilities: { image: false, audio: false, embeddedContext: false },
+				},
 				authMethods: [],
 			};
 		}
 		if (!initialized) throw new RequestError("Initialize the ACP connection first.");
+		if (discovery) return discovery(method, params);
+		if (!open) throw new RequestError("Codey could not start Seatbelt for this workspace.", -32603);
 		switch (method) {
 			case "session/new":
 				checkSetup(params);
