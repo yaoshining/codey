@@ -12,10 +12,14 @@ import { SessionManager } from "../../../packages/coding-agent/src/core/session-
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
+import { projectDomains } from "./project-domains.mjs";
 import { openSeatbelt } from "./seatbelt.mjs";
 import { toolDefinitions } from "./tools.mjs";
 
 const help = `Usage: codey --sandbox workspace-write [--workspace <directory>] [--provider <name> --model <id>]
+       codey --sandbox workspace-write [--workspace <directory>] --list-domains
+       codey --sandbox workspace-write [--workspace <directory>] --allow-domain <hostname>
+       codey --sandbox workspace-write [--workspace <directory>] --remove-domain <hostname>
 
 Open an interactive macOS session using the current files. Shell and file tools
 run offline in Seatbelt. A model can request one HTTPS read for your approval.
@@ -76,11 +80,33 @@ async function terminal() {
 			workspace: { type: "string" },
 			provider: { type: "string" },
 			model: { type: "string" },
+			"list-domains": { type: "boolean" },
+			"allow-domain": { type: "string" },
+			"remove-domain": { type: "string" },
 			help: { type: "boolean", short: "h" },
 		},
 	});
 	if (values.sandbox !== "workspace-write") throw new Error(help);
 	if (values.help) return console.log(help);
+	const management = [values["list-domains"], values["allow-domain"], values["remove-domain"]]
+		.filter((value) => value !== undefined).length;
+	if (management > 1 || (management && (values.provider !== undefined || values.model !== undefined))) {
+		throw new Error("Choose one project domain action without model options.");
+	}
+	if (management) {
+		const workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
+		if (!lstatSync(workspace).isDirectory()) throw new Error("The workspace must be a directory.");
+		const domains = projectDomains(realpathSync(homedir()), workspace);
+		if (values["list-domains"]) {
+			const entries = domains.list();
+			console.log(entries.length ? entries.join("\n") : "No HTTPS domains allowed for this workspace.");
+		} else if (values["allow-domain"] !== undefined) {
+			console.log(`Allowed HTTPS reads for ${domains.change("add", values["allow-domain"])} in ${JSON.stringify(workspace)}.`);
+		} else {
+			console.log(`Removed HTTPS permission for ${domains.change("remove", values["remove-domain"])} in ${JSON.stringify(workspace)}.`);
+		}
+		return;
+	}
 	if (process.platform !== "darwin") throw new Error("workspace-write requires macOS Seatbelt. No tool was run.");
 	if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("An interactive Codey terminal is required. RPC/T3 is unavailable.");
 	if (Boolean(values.provider) !== Boolean(values.model)) throw new Error("Specify --provider and --model together.");
@@ -117,7 +143,7 @@ async function terminal() {
 			},
 		}));
 		input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
-		customTools.push(httpsReadTool(terminalApproval(input, workspace)));
+		customTools.push(httpsReadTool(terminalApproval(input, workspace), projectDomains(home, workspace).has));
 		const result = await createAgentSession({
 			cwd: workspace, agentDir: host.agentDir, modelRuntime: runtime, model: model || undefined,
 			settingsManager: settings, resourceLoader: emptyResources(), sessionManager: SessionManager.inMemory(workspace),
@@ -141,7 +167,7 @@ async function readCommands(workspace, session, sandbox, model, input) {
 	console.log(`Codey macOS sandbox (workspace-write): ${display(workspace)}`);
 	if (model) console.log(`Model: ${display(model.provider)}/${display(model.id)}`);
 	else console.error(noModel);
-	console.log("Shell and file tools are offline. HTTPS reads require approval. Type /help or /quit.");
+	console.log("Shell and file tools are offline. HTTPS reads require approval or a project domain grant. Type /help or /quit.");
 	let active;
 	input.on("SIGINT", () => {
 		if (active) {

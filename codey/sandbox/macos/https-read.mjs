@@ -3,6 +3,7 @@ import { Resolver } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { Type } from "typebox";
+import { publicHostname } from "./project-domains.mjs";
 
 const maxBytes = 256 * 1024;
 
@@ -12,9 +13,7 @@ function destination(value) {
 	}
 	const url = new URL(value);
 	const host = url.hostname;
-	if (url.protocol !== "https:" || url.port || url.username || url.password || isIP(host) ||
-		!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(host) ||
-		/\.(?:localhost|local|internal|home\.arpa|onion)$/.test(host)) {
+	if (url.protocol !== "https:" || url.port || url.username || url.password || !publicHostname(host)) {
 		throw new Error("Use a public DNS hostname on HTTPS port 443, without credentials.");
 	}
 	return url;
@@ -73,16 +72,18 @@ async function read(url, signal) {
 	});
 }
 
-export function httpsReadTool(approve) {
+export function httpsReadTool(approve, allowed) {
 	return {
 		name: "https_read",
 		label: "HTTPS read",
-		description: "Read one public HTTPS URL as text after the terminal user approves this call. No shell, credentials, query, redirects, or file upload. Never retry a denied request.",
+		description: "Read one public HTTPS URL as text with terminal approval or an exact domain grant set by the user. No shell, credentials, query, redirects, or file upload. Never retry a denied request.",
 		parameters: Type.Object({ url: Type.String() }),
 		execute: async (_id, { url: raw }, signal) => {
 			try {
 				const url = destination(raw);
-				if (signal?.aborted || !await approve(url.href, signal)) throw new Error("HTTPS read was not approved. No request was made.");
+				if (signal?.aborted || (!allowed(url.hostname) && !await approve(url.href, signal))) {
+					throw new Error("HTTPS read was not approved. No request was made.");
+				}
 				const timeout = AbortSignal.timeout(15_000);
 				const body = await read(url, signal ? AbortSignal.any([signal, timeout]) : timeout);
 				return { content: [{ type: "text", text: body }], details: undefined };

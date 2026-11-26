@@ -1,6 +1,9 @@
 // Check the public flag route and isolation of the existing CLI entry points.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -26,4 +29,25 @@ test("unsupported sandbox options cannot fall through to ordinary Codey", () => 
 	const run = invoke("--sandbox", "workspace-write");
 	assert.equal(run.status, 1, run.stderr);
 	assert.match(run.stderr, /requires macOS Seatbelt|interactive Codey terminal/);
+});
+
+test("Codey manages exact HTTPS hostnames per canonical workspace", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "codey-domains-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	for (const name of ["home", "one", "two"]) mkdirSync(join(root, name));
+	symlinkSync(join(root, "one"), join(root, "alias"));
+	function domain(project, ...args) {
+		return spawnSync(codey, ["--sandbox", "workspace-write", "--workspace", join(root, project), ...args], {
+			encoding: "utf8", timeout: 20_000, env: { HOME: join(root, "home"), PATH: process.env.PATH },
+		});
+	}
+	assert.match(domain("one", "--list-domains").stdout, /No HTTPS domains/);
+	assert.equal(domain("one", "--allow-domain", "DOCS.example.org").status, 0);
+	assert.equal(domain("alias", "--list-domains").stdout.trim(), "docs.example.org");
+	assert.match(domain("two", "--list-domains").stdout, /No HTTPS domains/);
+	assert.equal(domain("one", "--allow-domain", "*.example.org").status, 1);
+	assert.equal(domain("one", "--allow-domain", "http://docs.example.org").status, 1);
+	assert.equal(domain("home", "--allow-domain", "docs.example.org").status, 1);
+	assert.equal(domain("alias", "--remove-domain", "docs.example.org").status, 0);
+	assert.match(domain("one", "--list-domains").stdout, /No HTTPS domains/);
 });

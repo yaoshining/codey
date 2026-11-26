@@ -6,14 +6,13 @@ import https from "node:https";
 import { syncBuiltinESMExports } from "node:module";
 
 const request = https.request;
-const resolve4 = Resolver.prototype.resolve4;
 const hostname = "codey-approval.example";
-Resolver.prototype.resolve4 = function (host, ...args) {
-	if (host !== hostname) return resolve4.call(this, host, ...args);
+Resolver.prototype.resolve4 = function (host) {
+	assert.equal(host, hostname, "Only the local fixture's synthetic DNS name may be resolved");
 	return Promise.resolve(["93.184.215.14"]);
 };
 https.request = function (url, options, callback) {
-	if (!(url instanceof URL) || url.hostname !== hostname) return request.apply(this, arguments);
+	assert.ok(url instanceof URL && url.hostname === hostname, "Only the local HTTPS fixture may be contacted");
 	assert.equal(options.method, "GET");
 	assert.equal(options.servername, hostname);
 	assert.equal(options.rejectUnauthorized, true);

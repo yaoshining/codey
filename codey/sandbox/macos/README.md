@@ -16,6 +16,16 @@ The worker uses a private temporary directory and only system shell commands on 
 
 When a task needs to read a public HTTPS URL, the model can call `https_read`. The terminal shows the operation, working directory and destination. Type the displayed approval code to allow just that read, or press Enter to deny it. Unanswered requests expire after 30 seconds. The host performs one HTTPS GET for the displayed URL using a public IPv4 address and TLS certificate validation. It accepts bounded text responses and cannot upload files, send credentials, or follow redirects. Shell commands stay offline, including `curl` and `npm install`. `git pull` also needs access to protected Git metadata.
 
+The user can authorize exact hostnames for `https_read` in a selected workspace:
+
+```bash
+codey --sandbox workspace-write --workspace /path/to/project --list-domains
+codey --sandbox workspace-write --workspace /path/to/project --allow-domain docs.example.org
+codey --sandbox workspace-write --workspace /path/to/project --remove-domain docs.example.org
+```
+
+Omit `--workspace` to use the current directory. The list starts empty and is stored under `~/.codey/agent/sandbox-network-domains` on the host. A grant uses the canonical workspace directory, so a symlink alias shares that list and another worktree has its own. Exact grants cover every permitted URL path on that hostname. Subdomains and wildcards are excluded. HTTPS, port 443, public IPv4, TLS verification, response limits, and the restrictions on queries and redirects still apply. Removing a grant restores the prompt on the next read.
+
 RPC/T3, extensions, MCP, automatic package or project resource discovery, attachments, `/review` and in-session worktree management are unavailable. Git commands that need shared metadata can fail. No approval command can widen the boundary. Codey stops if the Seatbelt launcher or its startup check fails.
 
 Seatbelt uses Apple's deprecated `/usr/bin/sandbox-exec`. This is an opt-in host-kernel boundary for the tools, with no VM or container resource limits. Validate the target macOS and Node combination before relying on it. A controlled test uses only synthetic paths and a loopback mock model:
