@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 34f802db53c3c4a4c89915474e1133b2b5694f1b
+          ref: 7abe84c8c30ac97373b9374c883200196853098e
           persist-credentials: false
       - name: Select Homebrew Node 26
         run: |
