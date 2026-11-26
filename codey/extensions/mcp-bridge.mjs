@@ -1,10 +1,10 @@
 // Add a trusted, explicitly configured Node bridge to the normal MCP extension.
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mcpNamespace, StdioTransport } from "@earendil-works/pi-mcp";
+import { StdioTransport } from "@earendil-works/pi-mcp";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
 import { loadMcpConfig } from "../../packages/coding-agent/src/extensions/mcp/config.ts";
-import { bridgeEndpoint, bridgeName, bridgeStore, bridgeTokenVariable, selectCertificate } from "./mcp-bridge-config.mjs";
+import { bridgeEndpoint, bridgeName, bridgeNamespace, bridgeStore, bridgeTokenVariable, selectCertificate } from "./mcp-bridge-config.mjs";
 import { loginBridge } from "./mcp-bridge-oauth.mjs";
 import { bridgeOAuthStore, oauthStatePath } from "./mcp-bridge-oauth-store.mjs";
 
@@ -22,9 +22,9 @@ export function loadWithBridges(ctx) {
 		const saved = bridgeStore(ctx.cwd, { optional: true })?.list();
 		if (!saved) return config;
 		config.errors.push(...saved.errors);
-		const names = new Set(config.servers.map(({ name }) => mcpNamespace(name)));
+		const names = new Set(config.servers.map(({ name }) => bridgeNamespace(name)));
 		for (const bridge of saved.entries) {
-			const namespace = mcpNamespace(bridge.name);
+			const namespace = bridgeNamespace(bridge.name);
 			if (names.has(namespace)) {
 				config.errors.push(`MCP bridge "${bridge.name}" conflicts with another server and was skipped.`);
 				continue;
@@ -96,8 +96,8 @@ async function manageBridges(pi, args, ctx) {
 			const input = await ctx.ui.input("Remove MCP bridge by name");
 			if (input === undefined) return;
 			const name = bridgeName(input.trim());
-			if (!await ctx.ui.confirm("Remove saved Node bridge?", `${name}\nRestart Codey or use /reload to close any active connection.`)) return;
-			const bridge = store.list().entries.find((entry) => entry.name === name);
+			const bridge = store.list().entries.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+			if (!await ctx.ui.confirm("Remove saved Node bridge?", `${bridge?.name ?? name}\nRestart Codey or use /reload to close any active connection.`)) return;
 			if (bridge && !bridge.tokenVariable) {
 				const credentials = bridgeOAuthStore(oauthStatePath(bridge));
 				await credentials.locked(() => { credentials.remove(); store.remove(name); });
@@ -114,7 +114,7 @@ async function manageBridges(pi, args, ctx) {
 		const name = bridgeName(nameInput.trim());
 		function conflicts() {
 			return [...regularConfig(ctx).servers, ...pi.getMcpServers(), ...store.list().entries]
-				.some((entry) => mcpNamespace(entry.name) === mcpNamespace(name));
+				.some((entry) => bridgeNamespace(entry.name) === bridgeNamespace(name));
 		}
 		if (conflicts()) throw new Error("An MCP server or bridge already uses that name.");
 		const endpoint = await ctx.ui.input("HTTPS MCP endpoint (no credentials or query)");

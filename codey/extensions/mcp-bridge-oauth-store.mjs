@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 
 export function oauthStatePath(bridge) {
-	const id = createHash("sha256").update(JSON.stringify([bridge.name, bridge.url, bridge.pem])).digest("hex");
+	const id = createHash("sha256").update(JSON.stringify([bridge.name.toLowerCase(), bridge.url, bridge.pem])).digest("hex");
 	return join(dirname(bridge.source), `.oauth-${id}.json`);
 }
 

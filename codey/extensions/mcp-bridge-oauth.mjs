@@ -63,15 +63,18 @@ function authorizeFetch(network, binding, allowed) {
 
 export async function loginBridge(bridge, ui, isCurrent) {
 	const resource = httpsUrl(bridge.url);
-	if (!await ui.confirm("Discover OAuth for this MCP bridge?", `${bridge.name}\n${resource.href}\n${bridge.pem ? "Use the saved certificate for this server." : "Use Node and platform certificate trust."}`)) return false;
 	const network = scopedNetwork(resource, bridge.pem);
 	const deadline = AbortSignal.timeout(180_000);
+	async function allow(title, details) {
+		return await ui.select(`${title}\n${details}`, ["Cancel", "Allow"], { signal: deadline, blockedKind: "permission" }) === "Allow";
+	}
 	try {
 		const challengeResponse = await network.request(resource, { headers: { Accept: "application/json, text/event-stream" }, signal: deadline });
 		const challenge = challengeResponse.status === 401 ? parseWwwAuthenticate(challengeResponse.headers.get("www-authenticate")) : {};
 		await challengeResponse.body?.cancel();
 		const metadataUrl = challenge.resourceMetadataUrl && httpsUrl(challenge.resourceMetadataUrl);
-		if (metadataUrl && metadataUrl.origin !== resource.origin && !await ui.confirm("Read protected-resource metadata from another HTTPS origin?", metadataUrl.origin)) return false;
+		if (metadataUrl && metadataUrl.origin !== resource.origin &&
+			!await allow("Read protected-resource metadata from another HTTPS origin?", `${metadataUrl.origin}\nMetadata only. Codey sends no OAuth credentials.`)) return false;
 		const resourceMetadata = await discoverProtectedResourceMetadata(resource, {
 			resourceMetadataUrl: metadataUrl, signal: deadline,
 			fetch: (url, init) => {
@@ -82,8 +85,12 @@ export async function loginBridge(bridge, ui, isCurrent) {
 		if (httpsUrl(resourceMetadata.resource).href !== resource.href) throw new Error("The OAuth resource does not match this MCP endpoint.");
 		const issuers = [...new Set((resourceMetadata.authorization_servers ?? []).map((url) => httpsUrl(url).href))];
 		if (!issuers.length || issuers.length > 12) throw new Error("The MCP metadata did not advertise a usable list of OAuth issuers.");
-		const issuer = await ui.select("OAuth issuer for this MCP bridge", ["Cancel", ...issuers], { blockedKind: "permission" });
-		if (!issuer || issuer === "Cancel") return false;
+		let [issuer] = issuers;
+		if (issuers.length > 1) {
+			issuer = await ui.select("Choose the OAuth issuer and allow reading its metadata", ["Cancel", ...issuers], { signal: deadline, blockedKind: "permission" });
+			if (!issuer || issuer === "Cancel") return false;
+		} else if (httpsUrl(issuer).origin !== resource.origin &&
+			!await allow("Read OAuth issuer metadata from another HTTPS origin?", `${issuer}\nMetadata only. Codey sends no OAuth credentials.`)) return false;
 		const authorizationServerMetadata = await discoverAuthorizationServerMetadata(issuer, {
 			signal: deadline,
 			fetch: (url, init) => {
@@ -93,14 +100,18 @@ export async function loginBridge(bridge, ui, isCurrent) {
 		});
 		const discovery = { authorizationServerUrl: issuer, authorizationServerMetadata, resourceMetadata };
 		const binding = bindingFor(resource, discovery);
-		const approved = "Register Codey and open the browser";
 		const scope = challenge.scope || resourceMetadata.scopes_supported?.join(" ");
-		const describe = ({ origin, pathname }) => origin + pathname;
-		if (await ui.select([
-			"Approve OAuth endpoints for this MCP bridge", `Resource: ${resource.href}`, `Issuer: ${issuer}`,
-			`Browser: ${describe(binding.browser)}`, `Registration: ${describe(binding.registration)}`, `Token: ${describe(binding.token)}`,
+		const destinations = [
+			["Browser sign-in page", binding.browser],
+			["Codey client registration", binding.registration],
+			["Codey token exchange and refresh", binding.token],
+		];
+		const external = destinations.filter(([, url]) => url.origin !== resource.origin);
+		if (external.length && !await allow("Allow these cross-origin OAuth destinations?", [
+			`MCP resource: ${resource.href}`,
+			...external.map(([role, { origin, pathname }]) => `${role}: ${origin}${pathname}`),
 			`Scope: ${scope?.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 240) || "issuer defaults"}`,
-		].join("\n"), ["Cancel", approved], { blockedKind: "permission" }) !== approved) return false;
+		].join("\n"))) return false;
 		deadline.throwIfAborted();
 		const callback = await OAuthCallbackServer.listen({ host: "127.0.0.1", path: "/callback", timeoutMs: 180_000,
 			renderPage: ({ ok }) => ok ? "Authorization received. Return to Codey." : "Authorization was declined or invalid. Return to Codey." });

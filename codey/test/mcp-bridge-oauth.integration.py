@@ -24,8 +24,13 @@ class OAuth(BaseHTTPRequestHandler):
     authorizations = 0
     grants = 0
     use_rotated = False
-    external = False
+    external_issuer = False
+    external_resource = False
+    external_browser = False
+    external_credentials = False
+    multiple_issuers = False
     metadata_reads = 0
+    resource_reads = 0
 
     def log_message(self, *args):
         pass
@@ -42,20 +47,26 @@ class OAuth(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/resource-info":
-            issuer = f"https://localhost:{self.server.server_port}" if OAuth.external else self.server.base
-            return self.reply(200, {"resource": self.server.base + "/mcp", "authorization_servers": [issuer],
+            OAuth.resource_reads += 1
+            issuers = [self.server.alias if OAuth.external_issuer else self.server.base]
+            if OAuth.multiple_issuers:
+                issuers.append(self.server.alias)
+            return self.reply(200, {"resource": self.server.base + "/mcp", "authorization_servers": issuers,
                                     "scopes_supported": ["projects:read"]})
         if self.path == "/.well-known/oauth-authorization-server":
             OAuth.metadata_reads += 1
-            return self.reply(200, {"issuer": self.server.base, "authorization_endpoint": self.server.base + "/authorize",
-                                    "registration_endpoint": self.server.base + "/register", "token_endpoint": self.server.base + "/token",
+            browser_origin = self.server.alias if OAuth.external_browser else self.server.base
+            credentials_origin = self.server.alias if OAuth.external_credentials else self.server.base
+            return self.reply(200, {"issuer": self.server.base, "authorization_endpoint": browser_origin + "/authorize",
+                                    "registration_endpoint": credentials_origin + "/register", "token_endpoint": credentials_origin + "/token",
                                     "response_types_supported": ["code"], "code_challenge_methods_supported": ["S256"],
                                     "token_endpoint_auth_methods_supported": ["none"], "authorization_response_iss_parameter_supported": True})
         if self.path == "/mcp":
             expected = "Bearer fixture-access-B" if OAuth.use_rotated else "Bearer fixture-access-A"
             if self.headers.get("Authorization") == expected:
                 return self.reply(405)
-            return self.reply(401, WWW_Authenticate=f'Bearer resource_metadata="{self.server.base}/resource-info", scope="projects:read"')
+            resource_origin = self.server.alias if OAuth.external_resource else self.server.base
+            return self.reply(401, WWW_Authenticate=f'Bearer resource_metadata="{resource_origin}/resource-info", scope="projects:read"')
         return self.reply(404)
 
     def do_POST(self):
@@ -101,7 +112,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import urlopen
 url = urlsplit(sys.argv[1]); params = parse_qs(url.query)
-assert f"{url.scheme}://{url.netloc}" == os.environ["FIXTURE_ISSUER"] and url.path == "/authorize"
+assert f"{url.scheme}://{url.netloc}" == os.environ["FIXTURE_BROWSER_ORIGIN"] and url.path == "/authorize"
 assert params['code_challenge_method'] == ['S256'] and params['scope'] == ['projects:read']
 redirect = params['redirect_uri'][0]
 assert redirect.startswith('http://127.0.0.1:') and redirect.endswith('/callback')
@@ -131,9 +142,12 @@ def run(binary):
         context.load_cert_chain(cert, key)
         server.socket = context.wrap_socket(server.socket, server_side=True)
         server.base = f"https://127.0.0.1:{server.server_port}"
+        server.alias = f"https://localhost:{server.server_port}"
         server.browser_log = root / "browser.json"
         decision = root / "decision"
-        (bridges / "fixture.json").write_text(json.dumps({"url": server.base + "/mcp", "pem": cert.read_text()}))
+        legacy_profile = bridges / "fixture.json"
+        legacy_profile.write_text(json.dumps({"url": server.base + "/mcp", "pem": cert.read_text()}))
+        original_profile = legacy_profile.read_bytes()
         for name in ["open", "xdg-open"]:
             launch = launchers / name
             launch.write_text(browser.replace("#!PYTHON", f"#!{sys.executable}"))
@@ -142,9 +156,10 @@ def run(binary):
                "FIXTURE_ISSUER": server.base, "FIXTURE_BROWSER_LOG": str(server.browser_log), "FIXTURE_DECISION": str(decision)}
         Thread(target=server.serve_forever, daemon=True).start()
 
-        def launch_login(answer, expected):
+        def launch_login(answer, expected=None, prompt=None, allow=False, roles=()):
             decision.write_text(answer)
-            with pexpect.spawn(binary, ["--no-session", "--offline"], cwd=project, env=env, encoding="utf-8",
+            browser_origin = server.alias if OAuth.external_browser else server.base
+            with pexpect.spawn(binary, ["--no-session", "--offline"], cwd=project, env={**env, "FIXTURE_BROWSER_ORIGIN": browser_origin}, encoding="utf-8",
                                timeout=25, dimensions=(47, 170)) as tty:
                 def enter(text="", down=False):
                     if text:
@@ -159,47 +174,73 @@ def run(binary):
                 assert not server.browser_log.exists()
                 enter("/mcp bridge login")
                 tty.expect_exact("Choose the MCP bridge")
+                tty.expect_exact("fixture")
                 enter()
-                tty.expect_exact("Discover OAuth for this MCP bridge?")
-                enter()
-                tty.expect_exact("OAuth issuer for this MCP bridge")
-                enter(down=True)
-                if answer == "external":
+                if prompt:
+                    tty.expect_exact(prompt)
+                    for role in roles:
+                        tty.expect_exact(role)
+                    assert not server.browser_log.exists()
+                    enter(down=allow)
+                if answer in ("wait", "approve", "reject"):
+                    tty.expect_exact("Waiting for browser approval")
+                    for unexpected in ("Discover OAuth", "Choose the OAuth issuer", "Read OAuth issuer", "Read protected-resource",
+                                       "Allow these cross-origin", "Approve OAuth endpoints"):
+                        assert unexpected not in tty.before
+                    for _ in range(100):
+                        if server.browser_log.exists():
+                            break
+                        time.sleep(.025)
+                    assert server.browser_log.exists(), "Codey never invoked the browser launcher"
+                    if answer == "wait":
+                        tty.send("\x03")
+                if expected:
                     tty.expect_exact(expected)
                 else:
-                    tty.expect_exact("Approve OAuth endpoints for this MCP bridge")
-                    start = OAuth.registrations
-                    if answer == "before":
-                        enter()
-                        time.sleep(.35)
-                        assert OAuth.registrations == start
-                    else:
-                        enter(down=True)
-                        tty.expect_exact("Waiting for browser approval")
-                        if answer == "wait":
-                            tty.send("\x03")
-                        tty.expect_exact(expected)
+                    time.sleep(.35)
+                    assert not server.browser_log.exists()
                 enter("/quit")
                 tty.expect(pexpect.EOF)
                 tty.close()
                 assert tty.exitstatus == 0
             server.browser_log.unlink(missing_ok=True)
 
-        OAuth.external = True
-        launch_login("external", "MCP bridge sign-in stopped.")
-        OAuth.external = False
+        OAuth.external_resource = True
+        launch_login("before", prompt="Read protected-resource metadata from another HTTPS origin?")
+        OAuth.external_resource = False
+        assert OAuth.resource_reads == OAuth.registrations == 0
+        OAuth.external_issuer = True
+        launch_login("before", prompt="Read OAuth issuer metadata from another HTTPS origin?")
+        launch_login("external", "MCP bridge sign-in stopped.", prompt="Read OAuth issuer metadata from another HTTPS origin?", allow=True)
+        OAuth.external_issuer = False
         assert OAuth.metadata_reads == OAuth.registrations == 0
-        launch_login("before", "")
+        OAuth.external_credentials = True
+        OAuth.external_browser = True
+        destinations_prompt = "Allow these cross-origin OAuth destinations?"
+        launch_login("before", prompt=destinations_prompt, roles=(
+            f"Browser sign-in page: {server.alias}/authorize",
+            f"Codey client registration: {server.alias}/register",
+            f"Codey token exchange and refresh: {server.alias}/token",
+        ))
+        OAuth.external_credentials = False
+        OAuth.external_browser = False
         assert OAuth.registrations == OAuth.exchanges == 0
+        OAuth.multiple_issuers = True
+        launch_login("before", prompt="Choose the OAuth issuer and allow reading its metadata")
+        OAuth.multiple_issuers = False
         launch_login("wait", "MCP bridge sign-in cancelled.")
-        launch_login("reject", "MCP bridge sign-in stopped.")
+        OAuth.external_browser = True
+        launch_login("reject", "MCP bridge sign-in stopped.", prompt=destinations_prompt, allow=True, roles=(f"Browser sign-in page: {server.alias}/authorize",))
+        OAuth.external_browser = False
         assert OAuth.registrations == 2 and OAuth.exchanges == 0 and not list(bridges.glob(".oauth-*.json"))
         launch_login("approve", "MCP bridge signed in.")
         assert OAuth.registrations == 3 and OAuth.exchanges == 1
         grant, = bridges.glob(".oauth-*.json")
+        legacy_id = hashlib.sha256(json.dumps(["fixture", server.base + "/mcp", cert.read_text().strip()], separators=(",", ":")).encode()).hexdigest()
+        assert grant.name == f".oauth-{legacy_id}.json" and legacy_profile.read_bytes() == original_profile
         assert grant.stat().st_mode & 0o777 == 0o600
         assert "codeVerifier" not in grant.read_text() and "oauthState" not in grant.read_text()
-        print("PASS: real TUI consent, browser cancellation and refusal, pinned DCR, PKCE exchange, private grant, and CA origin isolation.", flush=True)
+        print("PASS: real TUI same-origin sign-in opens the browser after one selection; distinct cross-origin consent, issuer selection, cancellation, PKCE and legacy grant identity verified.", flush=True)
 
         def status():
             with pexpect.spawn(binary, ["--mode", "rpc", "--no-session", "--offline"], cwd=project, env=env, encoding="utf-8", timeout=25) as rpc:

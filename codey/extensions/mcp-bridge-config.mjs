@@ -3,10 +3,12 @@ import { X509Certificate } from "node:crypto";
 import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { mcpNamespace } from "@earendil-works/pi-mcp";
+import { lockSync } from "proper-lockfile";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
 
 const maxConfigBytes = 48 * 1024;
-const safeName = /^[a-z][a-z0-9_-]{0,39}$/;
+const safeName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
 
 function owned(stat) {
 	return (process.getuid === undefined || process.getuid() === stat.uid) && !(stat.mode & 0o022);
@@ -50,8 +52,12 @@ export function bridgeEndpoint(value) {
 }
 
 export function bridgeName(value) {
-	if (!safeName.test(value)) throw new Error("Start the MCP bridge name with a lowercase letter and use up to 40 letters, digits, underscores or hyphens.");
+	if (typeof value !== "string" || !safeName.test(value)) throw new Error("Start the MCP bridge name with an ASCII letter and use up to 40 ASCII letters, digits, underscores or hyphens.");
 	return value;
+}
+
+export function bridgeNamespace(name) {
+	return mcpNamespace(name.toLowerCase());
 }
 
 export function bridgeTokenVariable(value) {
@@ -79,39 +85,52 @@ export function bridgeStore(cwd, { optional = false } = {}) {
 		}
 		return true;
 	}
+	function savedNames() {
+		return readdirSync(folder).sort().filter((file) => file.endsWith(".json"))
+			.map((file) => file.slice(0, -5)).filter((name) => safeName.test(name) && name === name.toLowerCase());
+	}
 	return {
 		list() {
 			const entries = [], errors = [];
 			if (!directory(false)) return { entries, errors };
-			for (const file of readdirSync(folder).sort()) {
-				const name = file.slice(0, -5);
-				if (!file.endsWith(".json") || !safeName.test(name)) continue;
+			for (const id of savedNames()) {
 				try {
-					const source = join(folder, file);
+					const source = join(folder, `${id}.json`);
 					const value = JSON.parse(readSmallFile(source, true));
+					const name = value.name === undefined ? id : bridgeName(value.name);
+					if (name.toLowerCase() !== id) throw new Error("The saved bridge name does not match its file.");
 					const url = bridgeEndpoint(value.url);
 					const pem = value.pem === undefined || value.pem === "" ? "" : validateCertificate(value.pem).pem;
 					entries.push({ name, url, pem, tokenVariable: bridgeTokenVariable(value.tokenVariable ?? ""), source });
 				} catch {
-					errors.push(`Could not read saved MCP bridge "${name}". Check its configuration or remove it with /mcp bridge remove.`);
+					errors.push(`Could not read saved MCP bridge "${id}". Check its configuration or remove it with /mcp bridge remove.`);
 				}
 			}
 			return { entries, errors };
 		},
 		add(name, value) {
+			const id = bridgeName(name).toLowerCase();
 			directory(true);
-			const temp = mkdtempSync(join(folder, ".new-"));
+			const release = lockSync(folder, { lockfilePath: join(folder, ".config.lock") });
 			try {
-				const pending = join(temp, "config");
-				writeFileSync(pending, `${JSON.stringify(value, null, "\t")}\n`, { flag: "wx", mode: 0o600 });
-				linkSync(pending, join(folder, `${bridgeName(name)}.json`));
+				if (savedNames().some((saved) => bridgeNamespace(saved) === bridgeNamespace(name))) {
+					throw new Error("An MCP bridge already uses that name.");
+				}
+				const temp = mkdtempSync(join(folder, ".new-"));
+				try {
+					const pending = join(temp, "config");
+					writeFileSync(pending, `${JSON.stringify({ ...value, name }, null, "\t")}\n`, { flag: "wx", mode: 0o600 });
+					linkSync(pending, join(folder, `${id}.json`));
+				} finally {
+					rmSync(temp, { recursive: true, force: true });
+				}
 			} finally {
-				rmSync(temp, { recursive: true, force: true });
+				release();
 			}
 		},
 		remove(name) {
 			if (!directory(false)) throw new Error("There are no saved MCP bridges.");
-			unlinkSync(join(folder, `${bridgeName(name)}.json`));
+			unlinkSync(join(folder, `${bridgeName(name).toLowerCase()}.json`));
 		},
 	};
 }
