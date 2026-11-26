@@ -8,6 +8,7 @@ import { Agent, fetch } from "undici";
 import { resolveHeadersOrThrow } from "../../packages/coding-agent/src/core/resolve-config-value.ts";
 import { createMcpExtension } from "../../packages/coding-agent/src/extensions/mcp/index.ts";
 import { createDefaultTransport } from "../../packages/coding-agent/src/extensions/mcp/runtime.ts";
+import { createBridgeTransport, loadWithBridges, withBridgeCommands } from "./mcp-bridge.mjs";
 
 function safelyOwned(stat) {
 	return (process.getuid === undefined || stat.uid === process.getuid()) && !(stat.mode & 0o022);
@@ -94,8 +95,11 @@ function tlsError(error, url, hasCa) {
 	return error;
 }
 
-export const codeyMcp = createMcpExtension({
+export const codeyMcp = withBridgeCommands(createMcpExtension({
+	loadConfig: loadWithBridges,
 	createTransport(entry, cwd, authProvider) {
+		const bridge = createBridgeTransport(entry);
+		if (bridge) return bridge;
 		const { config, name } = entry;
 		if (!("url" in config)) return createDefaultTransport(entry, cwd, authProvider);
 		const url = new URL(config.url);
@@ -124,4 +128,4 @@ export const codeyMcp = createMcpExtension({
 		}
 		return transport;
 	},
-});
+}));
