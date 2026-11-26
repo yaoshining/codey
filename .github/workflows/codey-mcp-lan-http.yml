@@ -39,6 +39,9 @@ jobs:
           fi
       - name: HTTPS direct, bridge and OAuth regressions
         run: |
+          export CODEY_TEST_OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          if [[ ! -x "$CODEY_TEST_OPENSSL" ]]; then brew install openssl@3; fi
+          "$CODEY_TEST_OPENSSL" version
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-direct.integration.py ./codey/bin/codey
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge.integration.py ./codey/bin/codey
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge-oauth.integration.py ./codey/bin/codey
