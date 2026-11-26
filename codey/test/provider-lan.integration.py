@@ -61,7 +61,7 @@ def run(binary):
         agent = home / ".codey/agent"
         agent.mkdir(parents=True)
         project.mkdir()
-        profile_file = agent / "custom-providers/lan-fixture.json"
+        profile_file = agent / "custom-providers/litellm.json"
         answers, queries = root / "dns.json", root / "queries"
         loopback = {"address": "127.0.0.1", "family": 4}
         public = {"address": "203.0.113.1", "family": 4}
@@ -94,12 +94,15 @@ def run(binary):
                     time.sleep(.08)
                 tty.send("\r")
 
-            def start(name):
+            def input_name(name):
                 enter("/provider")
                 tty.expect_exact("Add provider")
                 enter()
-                tty.expect_exact("New provider ID")
+                tty.expect_exact("New provider name")
                 enter(name)
+
+            def start(name):
+                input_name(name)
                 tty.expect_exact("Provider protocol")
                 enter()
                 tty.expect_exact("API Base URL")
@@ -109,6 +112,7 @@ def run(binary):
                 tty.expect_exact("Edit provider or models")
                 enter(down=1)
                 tty.expect_exact("Choose saved provider")
+                tty.expect_exact("LiteLLM (ID: litellm)")
                 enter()
                 tty.expect_exact("Provider protocol")
                 enter()
@@ -124,7 +128,7 @@ def run(binary):
             enter()
             assert not profile_file.parent.exists()
 
-            start("lan-fixture")
+            start("LiteLLM")
             enter(endpoint + "/")
             tty.expect_exact("Allow unencrypted HTTP for this Base URL")
             assert not Gateway.seen and not queries.exists()
@@ -141,12 +145,26 @@ def run(binary):
             tty.send("\x13")
             tty.expect_exact("1 selected")
             enter(down=3)
+            tty.expect_exact("LiteLLM (ID: litellm)")
             tty.expect_exact("Save provider")
             enter(down=1)
-            tty.expect_exact("Custom provider saved: lan-fixture.")
+            tty.expect_exact("Custom provider saved: LiteLLM (ID: litellm).")
             raw = profile_file.read_bytes()
-            assert json.loads(raw)["lanHttpApprovedUrl"] == endpoint
+            saved = json.loads(raw)
+            assert saved["lanHttpApprovedUrl"] == endpoint
+            assert saved["id"] == "litellm" and saved["displayName"] == "LiteLLM"
+            assert os.listdir(profile_file.parent) == ["litellm.json"]
             assert [event[0] for event in Gateway.seen] == ["/chat/v1/models", "/chat/v1/models?after=first"]
+            input_name("LITELLM")
+            tty.expect_exact("A provider or stored login already uses this ID.")
+            assert profile_file.read_bytes() == raw and len(Gateway.seen) == 2
+            enter("/model")
+            tty.expect_exact("(LiteLLM/second)")
+            tty.expect_exact("[litellm]")
+            tty.send("\x13")
+            time.sleep(.25)
+            settings = json.loads((agent / "settings.json").read_text())
+            assert settings["defaultProvider"] == "litellm" and settings["defaultModel"] == "second", settings
 
             # Reuse the same process and URL. The next TCP connection must reject
             # a mixed result even though a usable address is listed first.
@@ -176,13 +194,16 @@ def run(binary):
             enter("/quit")
             tty.expect(pexpect.EOF)
         assert "fixture-lan-token" not in log.getvalue()
+        print("PASS: LiteLLM display name and litellm ID appeared in /provider and /model, default used litellm, and duplicate LITELLM changed nothing.", flush=True)
         print("PASS: real /provider cancel sent no requests, hostname discovery kept its Host, mixed DNS was blocked, and endpoint edits required fresh consent.", flush=True)
 
-        def inference():
-            return subprocess.run([binary, "--model", "lan-fixture/second", "-p", "fixture prompt"],
+        def inference(*selection):
+            return subprocess.run([binary, *selection, "-p", "fixture prompt"],
                                   cwd=project, env=env, capture_output=True, text=True, timeout=25)
 
         answers.write_text(json.dumps([loopback]))
+        result = inference("--provider", "litellm", "--model", "second")
+        assert result.returncode == 0 and "CHAT_OK" in result.stdout and "fixture-lan-token" not in result.stdout + result.stderr, result
         result = inference()
         assert result.returncode == 0 and "CHAT_OK" in result.stdout and "fixture-lan-token" not in result.stdout + result.stderr, result
         assert Gateway.seen[-1] == ("/chat/v1/chat/completions", "Bearer fixture-lan-token", None, "second")
@@ -208,9 +229,9 @@ def run(binary):
             # lookup for its trusted host, exercising the same approved hostname policy.
             host_base = endpoint.replace("nas.local", "localhost")
             profile_file.write_text(json.dumps({**json.loads(raw), "baseUrl": host_base, "lanHttpApprovedUrl": host_base}))
-            args = ["--sandbox", "workspace-write", "--provider", "lan-fixture", "--model", "second"]
+            args = ["--sandbox", "workspace-write", "--provider", "litellm", "--model", "second"]
             with pexpect.spawn(binary, args, cwd=project, env=env, encoding="utf-8", timeout=25) as sandbox:
-                sandbox.expect_exact("Model: lan-fixture/second")
+                sandbox.expect_exact("Model: litellm/second")
                 sandbox.expect_exact("codey-sandbox> ")
                 sandbox.send("fixture host prompt\r")
                 assert sandbox.expect_exact(["CHAT_OK", "Connection error.", "codey-sandbox> "]) == 0, sandbox.before

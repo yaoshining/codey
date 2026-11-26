@@ -6,7 +6,9 @@
 
 ## 用 `/provider` 添加或编辑连接
 
-在普通终端的 Codey 中运行 `/provider`。选择 **Add provider**，输入一个未占用的 provider ID，再选 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages。填网关提供的 Base URL，并独立选择 **API Key** 或 **No authentication**。默认使用 HTTPS，公网端点必须使用 HTTPS。数字回环地址 `127.0.0.1` 或 `[::1]` 的本地开发服务可以直接用 HTTP。
+在普通终端的 Codey 中运行 `/provider`。选择 **Add provider**，输入服务商名称，再选 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages。填网关提供的 Base URL，并独立选择 **API Key** 或 **No authentication**。默认使用 HTTPS，公网端点必须使用 HTTPS。数字回环地址 `127.0.0.1` 或 `[::1]` 的本地开发服务可以直接用 HTTP。
+
+名称可用 ASCII 大小写字母，最多 40 个字符，以字母开头，后续可用字母、数字、连字符和下划线。例如，输入 `LiteLLM` 会保留显示名，内部 ID 为 `litellm`。`/provider` 会显示名称和 ID，`/model` 的模型标签可以显示 `LiteLLM/模型ID`，服务商徽标仍显示内部 ID。文件名、默认模型设置和 `codey --provider litellm` 使用小写 ID。大小写写法共用同一个 ID，已被自定义服务商、内置服务商或已保存登录占用的 ID 无法再次添加。
 
 可以选择 **Discover via the model catalog** 并确认一次目录请求。结果支持搜索和多选，屏幕底部显示切换选中与完成的快捷键。列表只表示目录公布的模型 ID。端点没有目录、目录请求失败或想追加别名时，选择 **Enter model IDs manually**，填单个 ID 或 JSON 数组，例如 `["model-a", "model-b"]`。向导不会发送聊天请求。保存后用 `/model` 选择；若目录还在刷新，可执行一次 `/reload`。
 

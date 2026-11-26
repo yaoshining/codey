@@ -6,13 +6,17 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
 import { authentication, discoverModels, protocols, providerFromProfile, validModelId } from "./provider-protocols.mjs";
-import { providerId, providerKey, providerStore } from "./provider-store.mjs";
+import { providerIdentity, providerKey, providerStore } from "./provider-store.mjs";
 import { providerEndpoint } from "./provider-endpoint.mjs";
 
 function hostStore(cwd) {
 	const home = realpathSync(homedir());
 	if (getAgentDir() !== join(home, ".codey", "agent")) return undefined;
 	return providerStore(home, realpathSync(cwd));
+}
+
+function providerLabel({ id, displayName }) {
+	return displayName === id ? id : `${displayName} (ID: ${id})`;
 }
 
 function providerInput(ui, title, { initial = "", secret = false } = {}) {
@@ -75,7 +79,7 @@ async function chooseModels(ui, initial, profile) {
 	let selected = [...initial];
 	let catalog = [];
 	for (;;) {
-		const action = await ui.select(`Models for ${profile.id} (${selected.length} selected)`, [
+		const action = await ui.select(`Models for ${providerLabel(profile)} (${selected.length} selected)`, [
 			"Discover via the model catalog", ...(catalog.length ? ["Search and select discovered models"] : []),
 			"Enter model IDs manually", "Keep selections and continue",
 		]);
@@ -106,7 +110,7 @@ async function chooseModels(ui, initial, profile) {
 	}
 }
 
-async function draft(ui, id, previous, action) {
+async function draft(ui, identity, previous, action) {
 	if (action === "Replace API key") {
 		const input = await providerInput(ui, "API key (masked)", { secret: true });
 		if (input === undefined) return;
@@ -130,7 +134,7 @@ async function draft(ui, id, previous, action) {
 	const label = await ui.select("Provider authentication", ordered(authentication, previous?.auth));
 	if (label === undefined) return;
 	const auth = [...authentication].find(([, value]) => value.label === label)[0];
-	const profile = { id, api, baseUrl, auth };
+	const profile = { ...identity, api, baseUrl, auth };
 	if (lanHttp) profile.lanHttpApprovedUrl = baseUrl;
 	if (auth === "key") {
 		if (previous?.auth === "key" && previous.baseUrl === baseUrl && previous.api === api) profile.key = previous.key;
@@ -145,7 +149,7 @@ async function draft(ui, id, previous, action) {
 }
 
 export default function customProviders(pi) {
-	const builtins = new Set(builtinProviders().map(({ id }) => id));
+	const builtins = new Set(builtinProviders().map(({ id }) => id.toLowerCase()));
 	builtins.add("llama.cpp");
 	const errors = [];
 	try {
@@ -174,24 +178,35 @@ export default function customProviders(pi) {
 				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key"] : [])];
 				const action = await ui.select("Custom providers", actions);
 				if (action === undefined) return;
-				const name = action === "Add provider" ? await ui.input("New provider ID") : await ui.select("Choose saved provider", existing.map(({ profile }) => profile.id));
+				const adding = action === "Add provider";
+				const name = adding ? await ui.input("New provider name") : await ui.select("Choose saved provider", existing.map(({ profile }) => providerLabel(profile)));
 				if (name === undefined) return;
-				const id = providerId(name.trim());
-				const entry = action !== "Add provider" ? existing.find(({ profile }) => profile.id === id) : undefined;
-				if (builtins.has(id) || store.reserved(id) || (!entry && (ctx.modelRegistry.getProvider(id) || existing.some(({ profile }) => profile.id === id)))) {
-					throw new Error("A provider or stored login already uses this ID.");
-				}
-				const profile = await draft(ui, id, entry?.profile, action);
+				const entry = adding ? undefined : existing.find(({ profile }) => providerLabel(profile) === name);
+				const identity = providerIdentity(entry?.profile.displayName ?? name.trim());
+				const { id } = identity;
+				const checkConflict = () => {
+					const registry = ctx.modelRegistry;
+					if (builtins.has(id) || store.reserved(id) ||
+						(adding && (store.has(id) || registry.getProvider(id) ||
+							registry.getAll().some(({ provider }) => provider.toLowerCase() === id) ||
+							registry.getModelsOfType("image").some(({ provider }) => provider.toLowerCase() === id) ||
+							registry.getModelsOfType("classifier").some(({ provider }) => provider.toLowerCase() === id)))) {
+						throw new Error("A provider or stored login already uses this ID.");
+					}
+				};
+				checkConflict();
+				const profile = await draft(ui, identity, entry?.profile, action);
 				if (!profile) return;
 				const old = entry?.profile;
 				const authChange = old?.auth === "key" && (profile.auth !== "key" || profile.key !== old.key || profile.baseUrl !== old.baseUrl || profile.api !== old.api);
-				const summary = `${id}\n${protocols.get(profile.api).label}\n${profile.baseUrl}\n${authentication.get(profile.auth).label}\n${profile.models.length} model IDs${authChange ? "\nThis replaces the saved authentication for this profile." : ""}`;
+				const summary = `${providerLabel(profile)}\n${protocols.get(profile.api).label}\n${profile.baseUrl}\n${authentication.get(profile.auth).label}\n${profile.models.length} model IDs${authChange ? "\nThis replaces the saved authentication for this profile." : ""}`;
 				if (await ui.select(`Save custom provider?\n${summary}`, ["Cancel", "Save provider"], { blockedKind: "permission" }) !== "Save provider") return;
+				checkConflict();
 				store.save(profile, entry?.revision);
 				pi.registerProvider(providerFromProfile(profile));
 				void ctx.modelRegistry.refresh({ allowNetwork: false, providers: [id], signal: AbortSignal.timeout(4_000) }).catch(() => {});
 				const saved = action === "Replace API key" ? "API key replaced for" : "Custom provider saved:";
-				ui.notify(`${saved} ${id}. Open /model to select it, or /reload if it is not listed yet.`, "info");
+				ui.notify(`${saved} ${providerLabel(profile)}. Open /model to select it, or /reload if it is not listed yet.`, "info");
 			} catch (error) {
 				ui.notify(`Custom provider: ${error.message}`, "error");
 			}

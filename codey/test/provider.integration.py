@@ -83,9 +83,11 @@ def run(binary):
         agent.mkdir(parents=True)
         project.mkdir()
         profiles = agent / "custom-providers"
-        original = '{ "providers": {} }\n'
+        original = '{ "providers": { "ConfiguredViaModels": { "apiKey": "fixture-config-key" } } }\n'
+        original_auth = '{"SavedViaLogin":{"type":"api_key","key":"fixture-login-key"}}\n'
         (agent / "models.json").write_text(original)
-        (agent / "auth.json").write_text('{}\n')
+        (agent / "auth.json").write_text(original_auth)
+        (agent / "auth.json").chmod(0o600)
         Thread(target=server.serve_forever, daemon=True).start()
         endpoint = f"http://127.0.0.1:{server.server_port}"
         env = {"HOME": str(home), "PATH": os.environ["PATH"], "TERM": "xterm-256color", "NO_COLOR": "1", "PI_SKIP_VERSION_CHECK": "1"}
@@ -111,7 +113,7 @@ def run(binary):
                 enter("/provider")
                 tty.expect_exact("Add provider")
                 enter()
-                tty.expect_exact("New provider ID")
+                tty.expect_exact("New provider name")
                 enter(name)
 
             def setup(name, protocol, path, key):
@@ -148,8 +150,9 @@ def run(binary):
             tty.expect_exact("Sign in with an account")
             tty.expect_exact("Sign in with an API key")
             escape()
-            start("openai")
-            tty.expect_exact("A provider or stored login already uses this ID.")
+            for conflict in ("OpenAI", "configuredviamodels", "SAVEDViaLogin"):
+                start(conflict)
+                tty.expect_exact("A provider or stored login already uses this ID.")
             assert not profiles.exists()
             start("cancelled")
             tty.expect_exact("Provider protocol")
@@ -220,8 +223,13 @@ def run(binary):
             tty.expect(pexpect.EOF)
         for secret in ["fixture-key-original", "fixture-anthropic-key", "fixture-key-rotated"]:
             assert secret not in log.getvalue()
-        assert (agent / "models.json").read_text() == original and (agent / "auth.json").read_text() == '{}\n'
-        assert json.loads((profiles / "fixture-chat.json").read_text())["models"] == ["first", "second", "manual alias"]
+        assert (agent / "models.json").read_text() == original and (agent / "auth.json").read_text() == original_auth
+        chat_file = profiles / "fixture-chat.json"
+        chat = json.loads(chat_file.read_text())
+        assert chat["models"] == ["first", "second", "manual alias"]
+        # Simulate an existing pre-display-name profile for the restart below.
+        del chat["displayName"]
+        chat_file.write_text(json.dumps(chat))
         assert all(path.stat().st_mode & 0o777 == 0o600 for path in profiles.glob("*.json"))
         assert [event[0] for event in Gateway.seen] == ["/chat/v1/models", "/chat/v1/models?after=first", "/responses/v1/models"]
         print("PASS: real /provider TUI, /login, masked keys, cancel/conflict, model discovery with pagination, multi-select, manual fallback, key rotation and /model.", flush=True)

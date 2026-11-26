@@ -80,8 +80,10 @@ export function providerFromProfile(profile) {
 		return withoutEchoedKey(response, authentication.get(profile.auth).token(profile));
 	};
 	const source = profile.auth === "none" ? "no authentication (Codey /provider)" : "Codey /provider";
+	const displayName = profile.displayName ?? profile.id;
+	// Pi's model selector can display a model label alongside the canonical provider ID.
 	const models = profile.models.map((id) => ({
-		api: profile.api, provider: profile.id, id, name: id, baseUrl: profile.baseUrl,
+		api: profile.api, provider: profile.id, id, name: displayName === profile.id ? id : `${displayName}/${id}`, baseUrl: profile.baseUrl,
 		reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 32000, maxTokens: 4096,
 	}));
@@ -89,7 +91,7 @@ export function providerFromProfile(profile) {
 	// the network: the guarded fetch replaces all authentication headers at dispatch.
 	const requestOptions = (options) => ({ ...options, apiKey: "codey-managed-credential", fetch });
 	return {
-		id: profile.id, name: profile.id, baseUrl: profile.baseUrl,
+		id: profile.id, name: displayName, baseUrl: profile.baseUrl,
 		auth: { apiKey: { name: source, check: async () => ({ type: "api_key", source }), resolve: async () => ({ auth: {}, source }) } },
 		getModels: () => models,
 		stream: (model, context, options) => streams.stream(model, context, requestOptions(options)),
