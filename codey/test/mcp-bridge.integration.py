@@ -111,6 +111,9 @@ def main():
             enter(terminal, "bridge-live")
             terminal.expect_exact("HTTPS MCP endpoint")
             enter(terminal, base + "/bridge")
+            terminal.expect_exact("Choose a verified public PEM for this endpoint")
+            terminal.send("\x1b[B")
+            enter(terminal)
             terminal.expect_exact("Absolute path to the verified public certificate PEM")
             enter(terminal, str(cert))
             terminal.expect_exact("Optional Bearer token environment variable name")
@@ -125,11 +128,26 @@ def main():
             terminal.expect_exact("New MCP bridge name")
             enter(terminal, "bridge-live")
             terminal.expect_exact("An MCP server or bridge already uses that name.")
+            enter(terminal, "/mcp bridge add")
+            terminal.expect_exact("New MCP bridge name")
+            enter(terminal, "system-default")
+            terminal.expect_exact("HTTPS MCP endpoint")
+            enter(terminal, base + "/default")
+            terminal.expect_exact("Use Node and system trust")
+            enter(terminal)
+            terminal.expect_exact("Optional Bearer token environment variable name")
+            assert "Absolute path" not in terminal.before
+            enter(terminal)
+            terminal.expect_exact("Trust and save this endpoint")
+            terminal.send("\x1b[B")
+            enter(terminal)
+            terminal.expect_exact("MCP bridge saved.")
             quit_terminal(terminal)
         bridge = saved / "bridge-live.json"
         assert json.loads(bridge.read_text())["url"] == base + "/bridge"
         assert "bridge-fixture-key" not in bridge.read_text()
         assert bridge.stat().st_mode & 0o777 == 0o600
+        assert json.loads((saved / "system-default.json").read_text())["pem"] == ""
         print("PASS: real /mcp bridge TUI required explicit PEM confirmation and saved one private entry without the token.", flush=True)
 
         def seed(name, endpoint, pem, token=""):
@@ -150,8 +168,9 @@ def main():
             report = rpc.before + rpc.after + rpc.readline()
             assert "bridge-fixture-key" not in report, report
             assert "bridge-live: connected, 1 tools" in report and "direct-http: connected, 1 tools" in report, report
+            assert "system-default: connected, 1 tools" in report, report
             assert "MCP bridge TLS identity mismatch" in report and "MCP bridge TLS certificate is untrusted" in report, report
-            assert "MCP bridge authentication failed." in report and "use the direct connection for OAuth" in report, report
+            assert "MCP bridge authentication failed." in report and "Run /mcp bridge login" in report, report
             children = subprocess.check_output(["ps", "-axo", "pid=,ppid=,command="], text=True)
             child_pids = []
             for line in children.splitlines():
@@ -159,7 +178,7 @@ def main():
                 if int(parent) == rpc.pid and "mcp-bridge-child.mjs" in command:
                     assert "bridge-fixture-key" not in command
                     child_pids.append(int(pid))
-            assert len(child_pids) == 1, child_pids
+            assert len(child_pids) == 2, child_pids
             rpc.sendeof()
             rpc.expect(pexpect.EOF)
             rpc.close()
@@ -172,10 +191,22 @@ def main():
             raise AssertionError(f"Bridge child {pid} did not exit")
         assert ("/bridge", "tools/list", "Bearer bridge-fixture-key") in Fixture.requests
         assert ("/direct", "tools/list", "Bearer direct-only") in Fixture.requests
+        assert ("/default", "tools/list", None) in Fixture.requests
         assert ("/unauthorized", "initialize", None) in Fixture.requests
         assert not any(path in ("/untrusted", "/wrong-san", "/no-discovery", "/no-redirect") for path, _, _ in Fixture.requests)
         assert all(auth != "Bearer bridge-fixture-key" or path in ("/bridge", "/redirect") for path, _, auth in Fixture.requests)
+        without_extra = {key: value for key, value in env.items() if key != "NODE_EXTRA_CA_CERTS"}
+        with pexpect.spawn(str(binary), ["--mode", "rpc", "--no-session", "--offline"], cwd=project,
+                           env=without_extra, encoding="utf-8", timeout=25) as rpc:
+            rpc.setecho(False)
+            rpc.sendline(json.dumps({"id": "tls", "type": "prompt", "message": "/mcp"}))
+            rpc.expect_exact("system-default: failed")
+            report = rpc.after + rpc.readline()
+            assert "configure a verified public PEM for this bridge" in report, report
+            rpc.sendeof()
+            rpc.expect(pexpect.EOF)
         print("PASS: bridge and ordinary direct transport listed tools; TLS failures, OAuth 401, no redirects, and child exit checked.", flush=True)
+        print("PASS: normal Node trust skipped the PEM field and connected; removing synthetic trust reproduced certificate rejection.", flush=True)
         server.shutdown()
 
 

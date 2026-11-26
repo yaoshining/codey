@@ -90,7 +90,7 @@ export function bridgeStore(cwd, { optional = false } = {}) {
 					const source = join(folder, file);
 					const value = JSON.parse(readSmallFile(source, true));
 					const url = bridgeEndpoint(value.url);
-					const { pem } = validateCertificate(value.pem);
+					const pem = value.pem === undefined || value.pem === "" ? "" : validateCertificate(value.pem).pem;
 					entries.push({ name, url, pem, tokenVariable: bridgeTokenVariable(value.tokenVariable ?? ""), source });
 				} catch {
 					errors.push(`Could not read saved MCP bridge "${name}". Check its configuration or remove it with /mcp bridge remove.`);
