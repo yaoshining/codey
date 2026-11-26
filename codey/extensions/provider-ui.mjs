@@ -263,7 +263,7 @@ export default function customProviders(pi) {
 
 		checkRuntime();
 		if (action === "Rename display name") {
-			const input = await providerInput(ui, `Display name for ${id} (capitalization only)`, { initial: profile.displayName });
+			const input = await providerInput(ui, `Display name for ${id}`, { initial: profile.displayName });
 			if (input === undefined || input.trim() === profile.displayName) return;
 			const displayName = input.trim();
 			checkRuntime();

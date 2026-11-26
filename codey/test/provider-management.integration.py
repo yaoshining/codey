@@ -19,6 +19,7 @@ import pexpect
 Gateway = runpy.run_path(str(Path(__file__).with_name("provider.integration.py")))["Gateway"]
 LAN_KEY = "synthetic-management-lan-key"
 TLS_KEY = "synthetic-management-tls-key"
+RENAMED = "NAS-LiteLLM"
 PROMPT = r"\x1b\[\?2026l"
 
 
@@ -51,7 +52,7 @@ def run(binary):
         lan_base = f"http://localhost:{lan.server_port}/chat/v1"
         old = {"id": "litellm", "api": "openai-completions", "auth": "key", "key": LAN_KEY,
                "baseUrl": lan_base, "lanHttpApprovedUrl": lan_base, "models": ["lan-model"], "fixtureNote": "Keep"}
-        tls_profile = {"id": "local-tls", "api": "openai-completions", "auth": "key", "key": TLS_KEY,
+        tls_profile = {"id": "local-tls", "displayName": RENAMED, "api": "openai-completions", "auth": "key", "key": TLS_KEY,
                        "baseUrl": f"https://127.0.0.1:{tls.server_port}/chat/v1", "models": ["tls-model"]}
         profile = profiles / "litellm.json"
         saved_tls = profiles / "local-tls.json"
@@ -92,17 +93,19 @@ def run(binary):
                 time.sleep(.08)
             tty.send("\r")
 
-        def operation(tty, action, label):
+        def operation(tty, action, label, peer=None):
             enter(tty, "/provider")
             tty.expect_exact("Delete provider")
             enter(tty, down=action)
             tty.expect_exact("Choose saved provider")
             tty.expect_exact(label)
             assert "manual-only" not in tty.before and "login-only" not in tty.before
+            if peer:
+                tty.expect_exact(peer)
             enter(tty)
 
         def replace_name(tty, name):
-            tty.expect_exact("Display name for litellm (capitalization only)")
+            tty.expect_exact("Display name for litellm")
             tty.send("\x05\x15")
             time.sleep(.15)
             enter(tty, name)
@@ -130,25 +133,26 @@ def run(binary):
         with terminal() as tty:
             start(tty)
             operation(tty, 3, "litellm")
-            replace_name(tty, "different")
-            tty.expect_exact("Change capitalization only. The provider ID remains litellm.")
+            replace_name(tty, "Invalid Name")
+            tty.expect_exact("Use a provider name starting with an ASCII letter")
             assert json.loads(profile.read_text()) == old
             operation(tty, 3, "litellm")
-            tty.expect_exact("Display name for litellm (capitalization only)")
+            tty.expect_exact("Display name for litellm")
             concurrent_rename("LITELLM")
             tty.send("\x05\x15")
             time.sleep(.15)
-            enter(tty, "LiteLLM")
+            enter(tty, RENAMED)
             tty.expect_exact("changed in another session")
             assert json.loads(profile.read_text()) == {**old, "displayName": "LITELLM"}
 
             operation(tty, 3, "LITELLM (ID: litellm)")
-            replace_name(tty, "LiteLLM")
-            tty.expect_exact("Provider display name saved: LiteLLM (ID: litellm).")
-            assert json.loads(profile.read_text()) == {**old, "displayName": "LiteLLM"}
+            replace_name(tty, RENAMED)
+            tty.expect_exact(f"Provider display name saved: {RENAMED} (ID: litellm).")
+            assert json.loads(profile.read_text()) == {**old, "displayName": RENAMED}
             assert read_default() == settings
+            assert sorted(path.name for path in profiles.glob("*.json")) == ["litellm.json", "local-tls.json"]
             enter(tty, "/model")
-            tty.expect_exact("(LiteLLM/lan-model)")
+            tty.expect_exact(f"({RENAMED}/lan-model)")
             tty.send("\x03")
             time.sleep(.25)
             quit(tty)
@@ -160,11 +164,11 @@ def run(binary):
             assert result.returncode == 0 and "CHAT_OK" in result.stdout and token not in result.stdout + result.stderr, result
             assert Gateway.seen[-1] == ("/chat/v1/chat/completions", f"Bearer {token}", None, model)
         Gateway.seen.clear()
-        print("PASS: legacy rename updated the live /model label, refused an ID change and a stale write, preserved the profile, and used HTTPS and LAN HTTP after restart.", flush=True)
+        print("PASS: legacy rename updated the live /model label, refused an invalid label and a stale write, preserved the profile, and used HTTPS and LAN HTTP after restart.", flush=True)
 
         with terminal("--provider", "litellm", "--model", "lan-model") as tty:
             start(tty)
-            operation(tty, 4, "LiteLLM (ID: litellm)")
+            operation(tty, 4, f"{RENAMED} (ID: litellm)")
             tty.expect_exact("Select a different current model with /model")
             enter(tty, "/model")
             tty.expect_exact("[local-tls]")
@@ -172,7 +176,7 @@ def run(binary):
             time.sleep(.25)
             enter(tty)
             tty.expect_exact("Model: tls-model")
-            operation(tty, 4, "LiteLLM (ID: litellm)")
+            operation(tty, 4, f"{RENAMED} (ID: litellm)")
             tty.expect_exact("Set a different default with /model")
             enter(tty, "/model")
             tty.expect_exact("[local-tls]")
@@ -184,20 +188,20 @@ def run(binary):
         with terminal("--provider", "local-tls", "--model", "tls-model",
                       "--models", "local-tls/tls-model,litellm/lan-model") as tty:
             start(tty)
-            operation(tty, 4, "LiteLLM (ID: litellm)")
+            operation(tty, 4, f"{RENAMED} (ID: litellm)")
             tty.expect_exact("Remove this provider's models from /scoped-models")
             quit(tty)
 
         with terminal("--provider", "local-tls", "--model", "tls-model") as tty:
             start(tty)
-            operation(tty, 4, "LiteLLM (ID: litellm)")
-            tty.expect_exact("Delete LiteLLM (ID: litellm)?")
+            operation(tty, 4, f"{RENAMED} (ID: litellm)", peer=f"{RENAMED} (ID: local-tls)")
+            tty.expect_exact(f"Delete {RENAMED} (ID: litellm)?")
             tty.expect_exact("its saved API key, and its LAN HTTP approval.")
             tty.expect_exact("Delete provider and saved data")
             enter(tty)
             assert profile.exists()
 
-            operation(tty, 4, "LiteLLM (ID: litellm)")
+            operation(tty, 4, f"{RENAMED} (ID: litellm)")
             tty.expect_exact("Delete provider and saved data")
             settings_before = defaults.read_bytes()
             write_json(defaults, json.loads(settings_before) | settings)
@@ -206,7 +210,7 @@ def run(binary):
             assert profile.exists()
             defaults.write_bytes(settings_before)
 
-            operation(tty, 4, "LiteLLM (ID: litellm)")
+            operation(tty, 4, f"{RENAMED} (ID: litellm)")
             tty.expect_exact("Delete provider and saved data")
             concurrent_rename("LITELLM")
             enter(tty, down=1)
@@ -220,7 +224,7 @@ def run(binary):
             assert not profile.exists()
             enter(tty, "/model")
             tty.expect_exact("[local-tls]")
-            tty.send("litellm")
+            tty.send("lan-model")
             tty.expect_exact("No matching models")
             tty.send("\x03")
             time.sleep(.25)
@@ -231,7 +235,7 @@ def run(binary):
         assert all(path.read_bytes() == content for path, content in protected.items())
         assert json.loads(defaults.read_text())["defaultProvider"] == "local-tls"
         assert all(secret not in transcript.getvalue() for secret in (LAN_KEY, TLS_KEY, "synthetic-login-key"))
-        print("PASS: current, default and scoped models blocked deletion, Cancel kept the file, stale confirmation was rejected, and confirmed deletion removed live models without a request.", flush=True)
+        print("PASS: matching display names showed distinct IDs, current, default and scoped models blocked deletion, Cancel kept the file, stale confirmation was rejected, and confirmed deletion removed live models without a request.", flush=True)
         lan.shutdown()
         tls.shutdown()
 

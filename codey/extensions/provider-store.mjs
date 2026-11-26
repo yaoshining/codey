@@ -6,9 +6,15 @@ import { authentication, protocols, validModelId } from "./provider-protocols.mj
 import { authorizedProviderEndpoint } from "./provider-endpoint.mjs";
 
 const validName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
+const validId = /^[a-z][a-z0-9_-]{0,39}$/;
 
-export function providerIdentity(displayName) {
-	if (typeof displayName !== "string" || !validName.test(displayName)) throw new Error("Use a provider name starting with an ASCII letter, with up to 40 letters, digits, hyphens or underscores.");
+function validateDisplayName(name) {
+	if (typeof name !== "string" || !validName.test(name)) throw new Error("Use a provider name starting with an ASCII letter, with up to 40 letters, digits, hyphens or underscores.");
+	return name;
+}
+
+export function providerIdentity(name) {
+	const displayName = validateDisplayName(name);
 	return { id: displayName.toLowerCase(), displayName };
 }
 
@@ -74,7 +80,7 @@ export function providerStore(home, workspace) {
 	}
 
 	function update(id, revision, change) {
-		if (providerIdentity(id).id !== id) throw new Error("Use the canonical provider ID.");
+		if (typeof id !== "string" || !validId.test(id)) throw new Error("Use the canonical provider ID.");
 		if (!directory(revision === undefined)) throw new Error(changed);
 		const target = join(folder, `${id}.json`);
 		const release = lockSync(folder);
@@ -118,9 +124,8 @@ export function providerStore(home, workspace) {
 					if (!protocols.has(raw.api) || !authentication.has(raw.auth) || !Array.isArray(raw.models) ||
 						!raw.models.length || raw.models.length > 500 || !raw.models.every(validModelId)) throw new Error("Invalid profile fields.");
 					const { baseUrl, lanHttp } = authorizedProviderEndpoint(raw);
-					const identity = providerIdentity(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
-					if (identity.id !== id) throw new Error("The display name does not match the provider ID.");
-					const profile = { ...identity, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
+					const displayName = validateDisplayName(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
+					const profile = { id, displayName, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
 					if (lanHttp) profile.lanHttpApprovedUrl = raw.lanHttpApprovedUrl;
 					if (raw.auth === "key") profile.key = providerKey(raw.key);
 					entries.push({ profile, revision });
@@ -134,13 +139,11 @@ export function providerStore(home, workspace) {
 		defaultProvider,
 		save(profile, revision) {
 			authorizedProviderEndpoint(profile);
-			const { id } = providerIdentity(profile.displayName);
-			if (profile.id !== id) throw new Error("The display name does not match the provider ID.");
-			update(id, revision, (target) => write(target, profile, revision === undefined));
+			validateDisplayName(profile.displayName);
+			update(profile.id, revision, (target) => write(target, profile, revision === undefined));
 		},
 		renameDisplayName(id, revision, name) {
-			const { id: normalized, displayName } = providerIdentity(name);
-			if (normalized !== id) throw new Error(`Change capitalization only. The provider ID remains ${id}.`);
+			const displayName = validateDisplayName(name);
 			if (typeof revision !== "string") throw new Error(changed);
 			update(id, revision, (target) => write(target, { ...parse(revision), displayName }, false));
 		},
