@@ -2,6 +2,7 @@
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { authorizedProviderEndpoint, fetchProvider } from "./provider-endpoint.mjs";
 
 export const protocols = new Map([
 	["openai-completions", { label: "OpenAI Chat Completions", inference: "/chat/completions", catalog: "/models", create: openAICompletionsApi }],
@@ -66,6 +67,7 @@ function withoutEchoedKey(response, key) {
 }
 
 export function providerFromProfile(profile) {
+	const endpoint = authorizedProviderEndpoint(profile);
 	const adapter = protocols.get(profile.api);
 	const streams = adapter.create();
 	const expected = new URL(profile.baseUrl + adapter.inference);
@@ -74,7 +76,7 @@ export function providerFromProfile(profile) {
 		if (url.origin !== expected.origin || url.pathname !== expected.pathname || url.username || url.password) {
 			throw new Error("The custom provider's request destination changed.");
 		}
-		const response = await globalThis.fetch(input, { ...init, redirect: "error", headers: headersFor(profile, init.headers ?? (input instanceof Request ? input.headers : undefined)) });
+		const response = await fetchProvider(input, { ...init, redirect: "error", headers: headersFor(profile, init.headers ?? (input instanceof Request ? input.headers : undefined)) }, endpoint);
 		return withoutEchoedKey(response, authentication.get(profile.auth).token(profile));
 	};
 	const source = profile.auth === "none" ? "no authentication (Codey /provider)" : "Codey /provider";
@@ -118,8 +120,9 @@ export function validModelId(value) {
 	return typeof value === "string" && value.trim().length > 0 && value.length <= 256 && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
 }
 
-export async function discoverModels(profile, fetch = globalThis.fetch) {
-	const endpoint = new URL(profile.baseUrl + protocols.get(profile.api).catalog);
+export async function discoverModels(profile) {
+	const policy = authorizedProviderEndpoint(profile);
+	const endpoint = new URL(policy.baseUrl + protocols.get(profile.api).catalog);
 	const seen = new Set();
 	const ids = new Set();
 	const signal = AbortSignal.timeout(8_000);
@@ -133,7 +136,8 @@ export async function discoverModels(profile, fetch = globalThis.fetch) {
 			if (seen.size >= 10) throw new Error("Stopped after 10 model catalog pages.");
 			seen.add(page.href);
 			let response;
-			try { response = await fetch(page, { headers: headersFor(profile), redirect: "manual", signal }); } catch {
+			try { response = await fetchProvider(page, { headers: headersFor(profile), redirect: "manual", signal }, policy); } catch (error) {
+				if (error.code === "CODEY_LAN_HTTP_ADDRESS") throw error;
 				throw new Error(signal.aborted ? "Model discovery timed out." : "Model discovery could not connect. Check the URL, network and TLS certificate.");
 			}
 			if (!response.ok) {

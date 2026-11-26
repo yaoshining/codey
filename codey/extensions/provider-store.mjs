@@ -3,25 +3,13 @@ import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtem
 import { isAbsolute, join, relative, sep } from "node:path";
 import { lockSync } from "proper-lockfile";
 import { authentication, protocols, validModelId } from "./provider-protocols.mjs";
+import { authorizedProviderEndpoint } from "./provider-endpoint.mjs";
 
 const validName = /^[a-z][a-z0-9_-]{0,39}$/;
 
 export function providerId(value) {
 	if (typeof value !== "string" || !validName.test(value)) throw new Error("Use a provider ID starting with a lowercase letter, with up to 40 letters, digits, hyphens or underscores.");
 	return value;
-}
-
-export function providerUrl(input, api) {
-	let url;
-	try { url = new URL(input); } catch { throw new Error("Enter an absolute API Base URL."); }
-	const loopback = url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname);
-	if (!/^https?:\/\//i.test(input) || (!loopback && url.protocol !== "https:") || url.username || url.password ||
-		input.length > 2048 || /[?#\\\p{Cc}\p{Cf}\s]/u.test(input)) {
-		throw new Error("Use HTTPS without credentials, query or fragment. HTTP is available only on 127.0.0.1 or [::1].");
-	}
-	const path = url.pathname.replace(/\/+$/, "");
-	if (api === "anthropic-messages" && path.endsWith("/v1")) throw new Error("Remove the trailing /v1 from the Anthropic Base URL.");
-	return url.origin + path;
 }
 
 export function providerKey(value) {
@@ -85,7 +73,9 @@ export function providerStore(home, workspace) {
 					const raw = parse(revision);
 					if (!protocols.has(raw.api) || !authentication.has(raw.auth) || !Array.isArray(raw.models) ||
 						!raw.models.length || raw.models.length > 500 || !raw.models.every(validModelId)) throw new Error("Invalid profile fields.");
-					const profile = { id, api: raw.api, auth: raw.auth, baseUrl: providerUrl(raw.baseUrl, raw.api), models: [...new Set(raw.models)] };
+					const { baseUrl, lanHttp } = authorizedProviderEndpoint(raw);
+					const profile = { id, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
+					if (lanHttp) profile.lanHttpApprovedUrl = raw.lanHttpApprovedUrl;
 					if (raw.auth === "key") profile.key = providerKey(raw.key);
 					entries.push({ profile, revision });
 				} catch {
@@ -96,6 +86,7 @@ export function providerStore(home, workspace) {
 		},
 		reserved,
 		save(profile, revision) {
+			authorizedProviderEndpoint(profile);
 			directory(true);
 			const id = providerId(profile.id);
 			const target = join(folder, `${id}.json`);

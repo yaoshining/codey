@@ -6,7 +6,8 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
 import { authentication, discoverModels, protocols, providerFromProfile, validModelId } from "./provider-protocols.mjs";
-import { providerId, providerKey, providerStore, providerUrl } from "./provider-store.mjs";
+import { providerId, providerKey, providerStore } from "./provider-store.mjs";
+import { providerEndpoint } from "./provider-endpoint.mjs";
 
 function hostStore(cwd) {
 	const home = realpathSync(homedir());
@@ -95,7 +96,7 @@ async function chooseModels(ui, initial, profile) {
 			selected = [...new Set(ids)];
 		} else {
 			if (action === "Discover via the model catalog") {
-				if (!await ui.confirm("Request the model catalog?", `${profile.baseUrl}${protocols.get(profile.api).catalog}\nAuthentication: ${authentication.get(profile.auth).label}. No inference request will be sent.`)) continue;
+				if (!profile.lanHttpApprovedUrl && !await ui.confirm("Request the model catalog?", `${profile.baseUrl}${protocols.get(profile.api).catalog}\nAuthentication: ${authentication.get(profile.auth).label}. No inference request will be sent.`)) continue;
 				const result = await discoverModels(profile);
 				catalog = result.ids.filter((id) => !profile.key || !id.includes(profile.key));
 				if (result.reason) ui.notify(`${result.reason} You can enter model IDs manually.`, "warning");
@@ -118,11 +119,19 @@ async function draft(ui, id, previous, action) {
 	const title = api === "anthropic-messages" ? "API Base URL (without trailing /v1)" : "API Base URL (include /v1 if required)";
 	const url = await providerInput(ui, title, { initial: previous?.baseUrl });
 	if (url === undefined) return;
-	const baseUrl = providerUrl(url.trim(), api);
+	const { baseUrl, lanHttp } = providerEndpoint(url.trim(), api);
+	if (lanHttp && previous?.lanHttpApprovedUrl !== baseUrl) {
+		const allow = "Allow unencrypted HTTP for this Base URL";
+		if (await ui.select(
+			`Use unencrypted LAN HTTP?\n${baseUrl}\nAPI keys, prompts, code, and responses are sent without encryption.`,
+			["Cancel", allow], { blockedKind: "permission" },
+		) !== allow) return;
+	}
 	const label = await ui.select("Provider authentication", ordered(authentication, previous?.auth));
 	if (label === undefined) return;
 	const auth = [...authentication].find(([, value]) => value.label === label)[0];
 	const profile = { id, api, baseUrl, auth };
+	if (lanHttp) profile.lanHttpApprovedUrl = baseUrl;
 	if (auth === "key") {
 		if (previous?.auth === "key" && previous.baseUrl === baseUrl && previous.api === api) profile.key = previous.key;
 		else {
