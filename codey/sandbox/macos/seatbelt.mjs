@@ -47,9 +47,9 @@ export function managedProfile() {
 (deny file-read-data file-write*
   (require-all
     (regex #"/[.][cC][oO][dD][eE][yY](/|$)")
-    (require-not (regex #"/[.][cC][oO][dD][eE][yY]/worktrees/task-[A-Za-z0-9]{6}/[^/]+(/|$)"))))
+    (require-not (subpath (param "WORKSPACE")))))
 (deny file-read* file-write*
-  (regex #"/[.][cC][oO][dD][eE][yY]/worktrees/task-[A-Za-z0-9]{6}/[^/]+(/[^/]+)*/[.][cC][oO][dD][eE][yY](/|$)"))
+  (regex #"/[.][cC][oO][dD][eE][yY]/.*/[.][cC][oO][dD][eE][yY](/|$)"))
 `;
 }
 

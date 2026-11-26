@@ -34,6 +34,8 @@ Start from the source repository root and use `/worktree` to create a managed ch
 
 The user-only manager runs fixed Apple Git commands under a separate offline policy and checks the source, checkout registration, and private Codey receipt before switching or deleting. It ignores host Git configuration and rejects unsupported local configuration and alternate object databases. Every switched workspace gets a new worker policy and its own existing domain grants. Model tools still cannot access shared Git metadata. A session launched directly inside a linked checkout can edit files. Start at the source repository root to use the manager.
 
+If HEAD tracks protected paths such as `.pi` or `.env`, Seatbelt can refuse checkout creation. The existing conversation stays active and the terminal reports where a partial checkout may remain.
+
 Seatbelt uses Apple's deprecated `/usr/bin/sandbox-exec`. This is an opt-in host-kernel boundary for the tools, with no VM or container resource limits. Validate the target macOS and Node combination before relying on it. A controlled test uses only synthetic paths and a loopback mock model:
 
 ```bash
