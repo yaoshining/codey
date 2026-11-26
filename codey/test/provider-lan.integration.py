@@ -204,16 +204,21 @@ def run(binary):
         print("PASS: trusted profiles reloaded, inference stayed direct despite HTTP_PROXY, and public DNS and HTTP redirects sent no request to another address.", flush=True)
 
         if sys.platform == "darwin":
+            # The sandbox launcher clears NODE_OPTIONS. Use the system localhost
+            # lookup for its trusted host, exercising the same approved hostname policy.
+            host_base = endpoint.replace("nas.local", "localhost")
+            profile_file.write_text(json.dumps({**json.loads(raw), "baseUrl": host_base, "lanHttpApprovedUrl": host_base}))
             args = ["--sandbox", "workspace-write", "--provider", "lan-fixture", "--model", "second"]
             with pexpect.spawn(binary, args, cwd=project, env=env, encoding="utf-8", timeout=25) as sandbox:
                 sandbox.expect_exact("Model: lan-fixture/second")
                 sandbox.expect_exact("codey-sandbox> ")
                 sandbox.send("fixture host prompt\r")
-                sandbox.expect_exact("CHAT_OK")
+                assert sandbox.expect_exact(["CHAT_OK", "Connection error.", "codey-sandbox> "]) == 0, sandbox.before
                 sandbox.expect_exact("codey-sandbox> ")
                 sandbox.send("/quit\r")
                 sandbox.expect(pexpect.EOF)
             assert Gateway.seen[-1] == ("/chat/v1/chat/completions", "Bearer fixture-lan-token", None, "second")
+            assert LanGateway.hosts[-1] == f"localhost:{server.server_port}"
             assert not Proxy.seen
             print("PASS: macOS Seatbelt host reused the approved LAN profile and did not use the configured proxy.", flush=True)
 
