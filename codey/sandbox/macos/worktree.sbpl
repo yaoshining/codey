@@ -3,6 +3,14 @@
 (allow process-exec (literal (param "GIT")))
 (allow file-read-metadata (path-ancestors (param "GIT")) (path-ancestors (param "COMMON")))
 (allow file-read* file-map-executable (literal (param "GIT")) (subpath (param "GIT_LIB")))
+; Apple Git's UTF-8-MAC filename normalization uses these system iconv tables.
+(allow file-read-data file-read-metadata
+  (literal "/usr/share/i18n/esdb/esdb.alias.db")
+  (literal "/usr/share/i18n/esdb/esdb.dir.db")
+  (literal "/usr/share/i18n/esdb/UTF/UTF-8-MAC.esdb")
+  (literal "/usr/share/i18n/esdb/UTF/UTF-8.esdb"))
+; Citrus checks the mapper directory index even for the identity UCS mapping.
+(allow file-read-metadata (literal "/usr/share/i18n/csmapper/mapper.dir"))
 (define common (param "COMMON"))
 (allow file-read-metadata (literal common))
 (allow file-read*

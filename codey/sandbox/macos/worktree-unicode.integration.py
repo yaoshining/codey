@@ -72,6 +72,11 @@ def run(binary):
             tty.expect_exact("Working directory changed to: ")
             tty.expect_exact(str(current_path))
             tty.expect_exact(prompt)
+            table = "/usr/share/i18n/esdb/esdb.dir.db"
+            assert os.access(table, os.R_OK)
+            send(f"!!if ! /bin/cat {table} >/dev/null 2>&1; then printf 'MODEL_''WORKER_BLOCKED'; fi")
+            tty.expect_exact(prompt)
+            assert "MODEL_WORKER_BLOCKED" in tty.before, tty.before
             assert "Delete worktree is unavailable in the current checkout." in details(current_path)
             send("")
             tty.expect_exact(prompt)
@@ -83,6 +88,14 @@ def run(binary):
                 send("2")
                 tty.expect_exact(prompt)
                 assert expect in tty.before, tty.before
+
+            staged = target_path / composed
+            staged.write_text("staged\n")
+            git("add", "--", composed, cwd=target_path)
+            assert git("status", "--porcelain", cwd=target_path).startswith("M ")
+            delete("contains modified, untracked, or ignored files")
+            assert staged.read_text() == "staged\n"
+            git("restore", "--staged", "--worktree", "--", composed, cwd=target_path)
 
             for name, body in ((decomposed, "edited\n"), ("untracked-" + composed, "new\n"),
                                ("ignored-" + decomposed, "ignored\n")):
@@ -107,7 +120,8 @@ def run(binary):
             tty.expect(pexpect.EOF)
             tty.close()
             assert tty.exitstatus == 0
-        print("PASS: Apple Git preserved Unicode dirty, untracked, ignored and current worktrees, then removed a clean checkout and its registration.", flush=True)
+        print("PASS: Apple Git preserved Unicode staged, modified, untracked, ignored and current worktrees, then removed a clean checkout and its registration.", flush=True)
+        print("PASS: the normal tool worker could not read the Git management process's system conversion table.", flush=True)
 
 
 if __name__ == "__main__":
