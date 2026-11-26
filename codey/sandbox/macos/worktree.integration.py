@@ -38,6 +38,13 @@ def main(binary):
         git("add", ".")
         git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
         (source / "tracked").write_text("source edit\n")
+        source_index = (source / ".git/index").read_bytes()
+        ordinary = Path(__file__).resolve().parents[2] / "worktree.mjs"
+        create_ordinary = f"import {{ createCheckout }} from {json.dumps(ordinary.as_uri())}; " + (
+            "console.log(createCheckout({ task: 'legacy', base: 'HEAD' }, process.cwd()).path);"
+        )
+        existing = Path(subprocess.check_output(["node", "--input-type=module", "-e", create_ordinary],
+                                                cwd=source, env=env, text=True).strip())
         args = ["--sandbox", "workspace-write", "--provider", "fixture", "--model", "fixture"]
         subprocess.run([binary, *args[:2], "--allow-domain", "codey-approval.example"], cwd=source, env=env, check=True)
         Thread(target=server.serve_forever, daemon=True).start()
@@ -55,16 +62,19 @@ def main(binary):
                 assert tty.expect_exact([expected, prompt]) == 0, tty.before
                 tty.expect_exact(prompt)
 
-            def new(option):
-                send("/worktree")
-                tty.expect_exact(chooser)
-                send(str(option))
+            def switched():
                 assert tty.expect_exact(["• Working directory changed to: ", prompt]) == 0, tty.before
                 assert "\x1b[" in tty.before
                 path = Path(tty.readline().split("\x1b", 1)[0].strip())
                 tty.expect_exact(prompt)
                 assert path.parent.parent == pool and path.name == source.name and path.is_dir()
                 return path
+
+            def new(option):
+                send("/worktree")
+                tty.expect_exact(chooser)
+                send(str(option))
+                return switched()
 
             def details(path):
                 send("/worktree")
@@ -143,6 +153,17 @@ def main(binary):
             assert "FRESH_CHAT" in json.dumps(FakeModel.requests[-1]["messages"])
             command("!!/bin/pwd", str(second))
 
+            assert "Switch and copy this conversation" in details(existing)
+            send("1")
+            assert switched() == existing
+            command("BROWSED_CHAT", "FAKE_MODEL_FINISHED")
+            assert "FRESH_CHAT" in json.dumps(FakeModel.requests[-1]["messages"])
+            assert "Switch with an empty conversation" in details(second)
+            send("2")
+            assert switched() == second
+            command("BROWSED_FRESH_CHAT", "FAKE_MODEL_FINISHED")
+            assert "BROWSED_CHAT" not in json.dumps(FakeModel.requests[-1]["messages"])
+
             (first / "model-output").unlink()
             (first / "ignored").write_text("keep\n")
             details(first)
@@ -173,7 +194,9 @@ def main(binary):
             tty.expect(pexpect.EOF)
             tty.close()
             assert tty.exitstatus == 0
+        assert (source / ".git/index").read_bytes() == source_index and (source / "tracked").read_text() == "source edit\n"
         print("PASS: public sandbox worktree create, copied and fresh chats, blocked old-root access and network grants, stale switch rollback and safe deletion.", flush=True)
+        print("PASS: browsed and switched to an ordinary managed worktree, preserved or cleared the selected history, and kept the source index and edit.", flush=True)
         server.shutdown()
 
 
