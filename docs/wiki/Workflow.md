@@ -30,4 +30,8 @@ codey worktree delete <id>
 
 在运行 T3 服务的 Mac 上，可为 Pi provider 的 **Launch arguments** 加入 `--sandbox=workspace-write`，继续使用上述 `codey-t3` 路径。T3 会加上 `--mode rpc`。沙箱使用 T3 启动进程时指定的项目目录，由 Codey 的 Seatbelt 规则约束工具。请在普通 `codey` 完成登录。
 
-沙箱首版支持模型选择、文本对话、流式响应、取消及同工作区会话恢复。T3 自动附带的扩展不加载，T3 的审批交互、浏览器、附件、服务档位和跨工作区恢复不受支持。启用后，原有普通 Pi 会话应继续用普通入口打开。 [沙箱 RPC 边界](Sandbox.md#macos-沙箱-rpc-与-t3)
+启用沙箱后，请在同一个项目新建一条**空白聊天**。后续保持沙箱启动参数和工作目录，打开这条聊天即可恢复，哪怕上次还没发出第一条消息。已有普通 Pi 或 Codey 聊天请继续用普通入口打开。旧聊天不会自动迁移或清空。
+
+如果旧聊天显示 `Starting Pi` 后报 `Pi transport closed during status reset`，请查看 T3 服务日志中在它之前的 `switch_session` 错误，再确认该聊天是否由沙箱在当前工作目录创建。模式或目录不匹配时，可在沙箱里新建空白聊天，把原聊天留在原来的模式和目录。
+
+沙箱支持模型选择、文本对话、流式响应、取消和同工作区恢复。T3 的审批交互、浏览器、附件、服务档位、扩展和跨工作区恢复目前不可用。[沙箱 RPC 边界](Sandbox.md#macos-沙箱-rpc-与-t3)
