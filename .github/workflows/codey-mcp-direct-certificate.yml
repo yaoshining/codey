@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: b57c704dab2e50556a0bb8aeffe0e39824d5ad4c
+          ref: 822707840127f1aadceb9ddc1f3ff110c00424fa
           persist-credentials: false
       - name: Select Homebrew Node 26
         run: |
@@ -37,6 +37,6 @@ jobs:
       - name: Test direct and bridge MCP with loopback-only fixtures
         run: |
           node --test codey/test/mcp-ca.test.mjs codey/test/mcp-oauth.test.mjs
-          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-direct.integration.py ./codey/bin/codey
+          CODEY_TEST_OPENSSL="$(brew --prefix openssl@4)/bin/openssl" "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-direct.integration.py ./codey/bin/codey
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge.integration.py ./codey/bin/codey
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge-oauth.integration.py ./codey/bin/codey
