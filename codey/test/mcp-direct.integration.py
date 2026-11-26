@@ -141,11 +141,11 @@ def run(binary):
         def add(tty, name, path, menu=False):
             enter(tty, "/mcp" if menu else "/mcp add")
             if menu:
-                tty.expect_exact("Add direct HTTPS server")
+                tty.expect_exact("Add direct MCP server")
                 enter(tty, down=True)
-            tty.expect_exact("New direct HTTPS MCP server name")
+            tty.expect_exact("New direct MCP server name")
             enter(tty, name)
-            tty.expect_exact("HTTPS MCP endpoint")
+            tty.expect_exact("MCP endpoint (HTTPS or local unauthenticated HTTP; no credentials or query)")
             enter(tty, server.base + path)
 
         def quit(tty):

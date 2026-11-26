@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { mcpNamespace } from "@earendil-works/pi-mcp";
 import { lockSync } from "proper-lockfile";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
+import { validateLanHttpUrl } from "./lan-http.mjs";
 
 const maxConfigBytes = 48 * 1024;
 const safeName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
@@ -69,7 +70,7 @@ export function bridgeStore(cwd, { optional = false, direct = false } = {}) {
 	const codey = join(realpathSync(homedir()), ".codey");
 	const agent = join(codey, "agent");
 	const folder = join(agent, direct ? "mcp-direct" : "mcp-bridges");
-	const label = direct ? "Direct HTTPS MCP" : "MCP bridge";
+	const label = direct ? "Direct MCP" : "MCP bridge";
 	const rel = relative(realpathSync(cwd), agent);
 	if (getAgentDir() !== agent || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))) {
 		if (optional) return undefined;
@@ -100,6 +101,15 @@ export function bridgeStore(cwd, { optional = false, direct = false } = {}) {
 					const value = JSON.parse(readSmallFile(source, true));
 					const name = value.name === undefined ? id : bridgeName(value.name);
 					if (name.toLowerCase() !== id) throw new Error("The saved bridge name does not match its file.");
+					if (direct && value.httpApprovedUrl !== undefined) {
+						if (Object.keys(value).some((key) => !["name", "url", "httpApprovedUrl"].includes(key))) {
+							throw new Error("HTTP MCP settings cannot include credentials, headers, or certificates.");
+						}
+						const url = validateLanHttpUrl(value.url).href;
+						if (url !== value.url || url !== value.httpApprovedUrl) throw new Error("The saved HTTP MCP address must match the approved URL.");
+						entries.push({ name, url, httpApprovedUrl: url, source });
+						continue;
+					}
 					const url = bridgeEndpoint(value.url);
 					const pem = value.pem === undefined || value.pem === "" ? "" : validateCertificate(value.pem).pem;
 					entries.push({ name, url, pem, tokenVariable: bridgeTokenVariable(value.tokenVariable ?? ""), source });
