@@ -22,11 +22,17 @@ function checkedDirectory(path, uid) {
 	return path;
 }
 
-function roots(canonicalBase, scope) {
+const codeySkills = [".codey", "agent", "skills"];
+const agentSkills = [".agents", "skills"];
+
+function skillRoots(canonicalBase, scope) {
 	const uid = scope === "user" ? process.getuid() : undefined;
-	const parts = scope === "user" ? [".codey", "agent", "skills"] : [".agents", "skills"];
-	const root = parts.reduce((parent, part) => checkedDirectory(join(parent, part), uid), canonicalBase);
-	return { root, uid };
+	return (scope === "user" ? [codeySkills, agentSkills] : [agentSkills]).flatMap((parts) => {
+		try {
+			const root = parts.reduce((parent, part) => checkedDirectory(join(parent, part), uid), canonicalBase);
+			return [{ root, uid }];
+		} catch { return []; }
+	});
 }
 
 function readSkill({ root, uid }, name, full) {
@@ -68,26 +74,31 @@ function readSkill({ root, uid }, name, full) {
 
 // The host calls this only with its canonical Home. The worker uses its sandbox cwd.
 export function discoverSkills(base, scope) {
-	try {
-		const location = roots(base, scope);
-		const directory = opendirSync(location.root);
-		const skills = [];
-		let count = 0, entry;
+	const skills = new Map();
+	let partial = false;
+	for (const location of skillRoots(base, scope)) {
 		try {
-			while (count++ < maxEntries && (entry = directory.readSync())) {
-				if (!entry.isDirectory() || !validName(entry.name)) continue;
-				const skill = readSkill(location, entry.name, false);
-				if (skill) skills.push(skill);
-			}
-		} finally { directory.closeSync(); }
-		skills.sort((a, b) => a.name.localeCompare(b.name));
-		return { skills: skills.slice(0, maxCatalog), partial: count > maxEntries || skills.length > maxCatalog };
-	} catch {
-		return { skills: [], partial: false };
+			const directory = opendirSync(location.root);
+			let count = 0, entry;
+			try {
+				while (count++ < maxEntries && (entry = directory.readSync())) {
+					if (!entry.isDirectory() || !validName(entry.name) || skills.has(entry.name)) continue;
+					const skill = readSkill(location, entry.name, false);
+					if (skill) skills.set(skill.name, skill);
+				}
+			} finally { directory.closeSync(); }
+			partial ||= count > maxEntries;
+		} catch { /* A missing root must not hide skills in the other root. */ }
 	}
+	const sorted = [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+	return { skills: sorted.slice(0, maxCatalog), partial: partial || sorted.length > maxCatalog };
 }
 
 export function loadSkill(base, scope, name) {
 	if (!validName(name)) return;
-	try { return readSkill(roots(base, scope), name, true); } catch { /* Missing or inaccessible root. */ }
+	const roots = skillRoots(base, scope);
+	for (const [index, location] of roots.entries()) {
+		// The preferred root also takes precedence when its body cannot be loaded.
+		if (index === roots.length - 1 || readSkill(location, name, false)) return readSkill(location, name, true);
+	}
 }
