@@ -22,6 +22,14 @@
 
 如果你的网关是 LiteLLM，OpenAI 协议通常填 `https://gateway.example.org/v1`，Anthropic Messages 通常填 `https://gateway.example.org`。模型 ID 填网关给出的别名。自定义连接的浏览器 OAuth 暂未开放。macOS Seatbelt 会话重新启动时可从可信宿主目录读取已保存的连接，向导仍在普通 Codey 中使用。
 
+### 为现有模型配置推理档位
+
+在普通 Codey 运行 `/provider`，依次选择 **Configure model reasoning**、已保存的连接和模型。只勾选网关确认支持的档位，例如 `low` 和 `high`，按界面底部的完成键并确认保存。然后用 `/model` 选中该模型，再用 `/thinking` 选档位。取消全部勾选并保存可以清除这个模型的配置。
+
+OpenAI Responses 发送 `reasoning.effort`，可选 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`。支持 OpenAI 格式的 Chat Completions 网关可配置 `low`、`medium`、`high`，使用 `reasoning_effort`。Anthropic Messages 的推理预算使用另一套参数，此菜单暂不支持。Codey 按模型保存支持档位，模型别名或目录结果不会自动开启推理。选 `off` 时请求省略档位，由网关决定默认行为。
+
+更换协议或 Base URL 后，要为新路由重新选择支持的档位。其他正在运行的 Codey 或 T3 连接需重启以加载这份配置。普通 RPC 沿用 Pi 的档位回退规则，沙箱 RPC 会明确拒绝不支持的档位。
+
 ### 局域网 LiteLLM 使用 HTTP
 
 在向导里填写如 `http://192.168.1.20:4000/v1` 或 `http://nas.local:4000/v1`。首次使用时会显示完整地址并请你确认。确认后，API key、提示词、代码和响应会以明文传输。直接选择 **Discover via the model catalog** 即可获取模型列表，保存后可正常推理。换主机、端口或 Base URL 路径需要重新确认。取消确认不会发送请求或保存变更。

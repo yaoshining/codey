@@ -1,4 +1,6 @@
 // Serve an explicit subset of Pi JSONL on the isolated SDK session.
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { THINKING_LEVEL_OPTIONS } from "../../../packages/coding-agent/src/core/defaults.ts";
 import { toJsonEvent } from "../../../packages/coding-agent/src/modes/json-event.ts";
 import { serializeJsonLine } from "../../../packages/coding-agent/src/modes/rpc/jsonl.ts";
 import { sandboxRpcSessions } from "./rpc-sessions.mjs";
@@ -6,7 +8,6 @@ import { sandboxRpcSessions } from "./rpc-sessions.mjs";
 const maxRequest = 256 * 1024;
 const maxOutput = 16 * 1024 * 1024;
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const extraFields = new Map([
 	["prompt", ["message", "streamingBehavior"]], ["set_model", ["provider", "modelId"]],
 	["set_thinking_level", ["level"]], ["set_session_name", ["name"]],
@@ -141,7 +142,8 @@ export async function runSandboxRpc({ workspace, home, runtime, launchPath, ephe
 				return mutate(async () => { await session.setModel(selected); return wireModel(selected); });
 			}
 			case "set_thinking_level":
-				if (!thinkingLevels.includes(request.level)) throw new Error("Invalid thinking level.");
+				if (!THINKING_LEVEL_OPTIONS.includes(request.level)) throw new Error("Invalid thinking level.");
+				if (!session.getAvailableThinkingLevels().includes(request.level)) throw new Error("Thinking level unavailable for the selected model.");
 				session.setThinkingLevel(request.level);
 				return;
 			case "set_session_name":
@@ -212,7 +214,11 @@ function wireModel(model) {
 	if (!model) return undefined;
 	// Configured model headers and endpoint URLs can include host credentials.
 	const { id, provider, name, api, input, reasoning, contextWindow, maxTokens, cost } = model;
-	return { id, provider, name, api, input, reasoning, contextWindow, maxTokens, cost };
+	const supported = reasoning && getSupportedThinkingLevels(model);
+	const thinkingLevelMap = supported && Object.fromEntries(
+		THINKING_LEVEL_OPTIONS.map((level) => [level, supported.includes(level) ? level : null]),
+	);
+	return { id, provider, name, api, input, reasoning, contextWindow, maxTokens, cost, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
 }
 
 function stringField(value, field, limit = 512) {
