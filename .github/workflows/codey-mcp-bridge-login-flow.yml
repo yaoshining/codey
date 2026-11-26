@@ -1,9 +1,9 @@
-name: Verify Codey MCP bridge browser OAuth
+name: Verify Codey MCP bridge sign-in flow
 
 on:
   push:
-    branches: [verify/codey-mcp-bridge-oauth]
-    paths: [.github/workflows/codey-mcp-bridge-oauth.yml]
+    branches: [verify/codey-mcp-bridge-login-flow]
+    paths: [.github/workflows/codey-mcp-bridge-login-flow.yml]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 15a17834e12d629cb0c3a6d91f5d204e49920495
+          ref: c7b738fa37d6f2e81d0dacc060d072c3eb02f120
           persist-credentials: false
       - name: Select official Node 24
         if: ${{ !matrix.brew }}
