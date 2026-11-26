@@ -62,6 +62,15 @@ function rawChanges(raw, kind) {
 	return changes;
 }
 
+function validatePaths(changes) {
+	for (const { path } of changes) {
+		const parts = path.split("/");
+		if (/[\p{Cc}\p{Cf}]/u.test(path) || parts.some((part) => !part || part === "." || part === ".." || protectedPart.test(part))) {
+			throw new Error("Review refused a protected or unsupported file path.");
+		}
+	}
+}
+
 export function collectSandboxReview(workspace, git, tempRoot) {
 	const metadata = join(workspace, ".git");
 	if (!lstatSync(metadata, { throwIfNoEntry: false })?.isDirectory()) {
@@ -118,7 +127,7 @@ export function collectSandboxReview(workspace, git, tempRoot) {
 				"-c", "core.fsmonitor=false", "-c", "protocol.allow=never", ...args,
 			], { cwd: diff ? temp : workspace, env, timeout, maxBuffer, stdio: ["ignore", "pipe", "pipe"] });
 			if (result.error?.code === "ENOBUFS") throw new Error("The review exceeds its 64 KiB size limit.");
-			if (result.error || result.stderr.length || (result.status !== 0 && !(diff && result.status === 1))) {
+			if (result.error || result.stderr?.length || (result.status !== 0 && !(diff && result.status === 1))) {
 				throw new Error("Git could not collect changes within the review boundary.");
 			}
 			return result.stdout;
@@ -130,17 +139,15 @@ export function collectSandboxReview(workspace, git, tempRoot) {
 		}
 		const raw = ["--raw", "-z", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", "--"];
 		const staged = rawChanges(decode.decode(run(["diff", "--cached", "--ignore-submodules=dirty", ...raw])), "Staged changes");
+		// Refuse protected staged entries before inspecting the live worktree.
+		validatePaths(staged);
 		const unstaged = rawChanges(decode.decode(run(["diff-files", "--ignore-submodules=all", ...raw])), "Unstaged changes");
 		const untracked = decode.decode(run(["ls-files", "-z", "--others", "--exclude-standard", "--"])).split("\0").filter(Boolean)
 			.map((path) => ({ kind: "Untracked file", path, afterMode: "100644" }));
 		const changes = [...staged, ...unstaged, ...untracked];
 		if (changes.length > 100) throw new Error("More than 100 changes. Review a smaller set of files.");
-		for (const { path } of changes) {
-			const parts = path.split("/");
-			if (/[\p{Cc}\p{Cf}]/u.test(path) || parts.some((part) => !part || part === "." || part === ".." || protectedPart.test(part))) {
-				throw new Error("Review refused a protected or unsupported file path.");
-			}
-		}
+		validatePaths(unstaged);
+		validatePaths(untracked);
 
 		function blob(hash, mode) {
 			if (!hash || mode === "000000") return;

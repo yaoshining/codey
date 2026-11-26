@@ -344,8 +344,10 @@ def main():
                 terminal.expect_exact(review_started)
                 assert "\x1b[" in terminal.before
 
-            def end_review():
+            def end_review(report=None):
                 terminal.expect_exact(review_finished)
+                if report:
+                    assert report in terminal.before, terminal.before
                 assert "\x1b[" in terminal.before and "Network approval requested" not in terminal.before
                 terminal.expect_exact("codey-sandbox> ")
 
@@ -385,32 +387,27 @@ def main():
 
             git("add", "-f", ".env")
             start_review()
-            terminal.expect_exact("protected or unsupported file path")
-            end_review()
+            end_review("protected or unsupported file path")
             git("rm", "--cached", "-q", ".env")
             (source / "too-large").write_text("x" * 65537)
             start_review()
-            terminal.expect_exact("exceeds the review size limit")
-            end_review()
+            end_review("exceeds the review size limit")
             (source / "too-large").unlink()
             (source / "linked-secret").symlink_to(credentials)
             start_review()
-            terminal.expect_exact("regular files without links")
-            end_review()
+            end_review("regular files without links")
             (source / "linked-secret").unlink()
             assert len(FakeModel.requests) == initial_count + 1
 
             FakeModel.review_mode = "error"
             start_review()
-            terminal.expect_exact("The model request failed.")
-            end_review()
+            end_review("The model request failed.")
             FakeModel.review_mode = "success"
             FakeModel.review_gate.clear()
             start_review()
             terminal.expect_exact("P2 STREAMED_REVIEW_FIRST")
             terminal.sendcontrol("c")
-            terminal.expect_exact("Code review canceled.")
-            end_review()
+            end_review("Code review canceled.")
             FakeModel.review_gate.set()
             terminal.send("Continue with the normal fixture tool.\r")
             terminal.expect_exact("FAKE_MODEL_FINISHED")
