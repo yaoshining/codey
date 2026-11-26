@@ -23,9 +23,16 @@ test("unsupported sandbox options cannot fall through to ordinary Codey", () => 
 	const mode = invoke("--sandbox", "other-mode");
 	assert.equal(mode.status, 1, mode.stderr);
 	assert.match(mode.stderr, /Codey macOS sandbox/);
-	const rpc = invoke("--mode", "rpc", "--sandbox", "workspace-write");
+	const rpc = invoke("--mode", "rpc", "--sandbox", "workspace-write", "--extension", "/not/a/trusted/extension.ts");
 	assert.equal(rpc.status, 1, rpc.stderr);
-	assert.match(rpc.stderr, /Codey macOS sandbox/);
+	assert.equal(rpc.stdout, "");
+	assert.match(rpc.stderr, /Extensions are unavailable/);
+	if (process.platform !== "darwin") {
+		const missingBackend = invoke("--sandbox", "workspace-write", "--mode", "rpc");
+		assert.equal(missingBackend.status, 1, missingBackend.stderr);
+		assert.equal(missingBackend.stdout, "");
+		assert.match(missingBackend.stderr, /requires macOS Seatbelt/);
+	}
 	const run = invoke("--sandbox", "workspace-write");
 	assert.equal(run.status, 1, run.stderr);
 	assert.match(run.stderr, /requires macOS Seatbelt|interactive Codey terminal/);
