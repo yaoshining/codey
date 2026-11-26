@@ -6,13 +6,21 @@
 
 ## 添加直连 HTTPS 服务
 
-在普通 Codey 的 `/mcp` 菜单选择 **Add direct HTTPS server**，或输入 `/mcp add`。输入服务名和完整 HTTPS MCP 地址。证书正常受信任时直接添加，无需确认指纹。
+在普通 Codey 的 `/mcp` 菜单选择 **Add direct MCP server**，或输入 `/mcp add`。输入服务名和完整 HTTPS MCP 地址。证书正常受信任时直接添加，无需确认指纹。
 
 如果服务使用不受信任的自签名证书，Codey 会显示地址与 SHA-256 指纹。通过 NAS 管理后台或管理员等可信渠道取得指纹，核对完全匹配后选择 **Fingerprint matches — trust and add this service**。取消添加不会保留证书或服务。Codey 会重新验证指纹、有效期和 SAN，使用 IP 地址时证书必须包含匹配的 IP SAN。自建 CA 签发的服务请使用下文的手工 CA 配置。
 
 若服务要求身份验证，添加后会出现 **Open browser to sign in**。也可选 **Later**，之后从 `/mcp` 菜单登录，或运行 `/mcp direct login <名称>`。向导的 OAuth 登录支持动态客户端注册。需要固定客户端或特殊 OAuth 设置的服务可继续使用手工配置。Codey 的信任只适用于保存的 MCP 地址和此服务的同源 OAuth 请求。跨源 OAuth 有独立的确认和 TLS 校验。浏览器使用自己的信任设置，若提示证书错误，应在浏览器外核对并按管理员指引处理后再继续。
 
 向导添加的服务保存在 `~/.codey/agent/mcp-direct`。证书更换需要重新核对。运行 `/mcp direct remove <名称>` 删除旧条目和该服务的本地授权，再用向导添加。此流程不会更改钥匙串或现有手工 MCP 配置。
+
+## 添加无需登录的本机或局域网 HTTP 服务
+
+在普通 Codey 终端运行 `/mcp add`，或在 `/mcp` 中选择 **Add direct MCP server**。可输入 `http://127.0.0.1:8080/mcp` 或 `http://nas.local:8080/mcp`。Codey 会先展示完整地址。只有明确确认后才会连接。HTTP 不加密，MCP 工具参数和结果可能被网络上的其他人读取或篡改。
+
+HTTP 只允许回环、RFC1918 私有 IPv4 和 IPv6 ULA。主机名每次建立连接时都必须只解析到这些地址。连接直接使用经过检查的地址，不使用代理或跟随重定向。公网、OAuth 和 Bearer 等需要认证的连接请使用 HTTPS。HTTP 地址不可包含用户名、密码、查询参数或片段，也不支持设置认证头。
+
+重启普通 Codey 后会自动加载这些服务。可以用 `/mcp reconnect <名称>` 重连，用 `/mcp direct remove <名称>` 删除。此选项只适用于普通终端向导新增的条目。沙箱和 RPC 不加载这些条目，已有手工配置继续按原规则工作。Node 桥接仍要求 HTTPS。
 
 ## 通过本地 Node 桥接单个服务
 

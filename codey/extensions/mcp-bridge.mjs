@@ -120,6 +120,7 @@ async function manageBridges(pi, args, ctx) {
 		if (conflicts()) throw new Error("An MCP server or bridge already uses that name.");
 		const endpoint = await ctx.ui.input("HTTPS MCP endpoint (no credentials or query)");
 		if (endpoint === undefined) return;
+		if (/^http:/i.test(endpoint.trim())) throw new Error("Node bridges require HTTPS. Use /mcp add for unauthenticated local HTTP.");
 		const url = bridgeEndpoint(endpoint.trim());
 		const standard = "Use Node and system trust";
 		const privateCa = "Choose a verified public PEM for this endpoint";

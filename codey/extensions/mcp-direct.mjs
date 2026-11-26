@@ -1,4 +1,4 @@
-// Add direct HTTPS servers with user-confirmed endpoint trust and scoped OAuth.
+// Add direct servers with scoped HTTPS trust or explicit unauthenticated HTTP consent.
 import { McpAuthRequiredError, McpClient, StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import { parseWwwAuthenticate } from "@earendil-works/pi-mcp/oauth";
 import { Agent, fetch } from "undici";
@@ -7,8 +7,10 @@ import { loadWithBridges } from "./mcp-bridge.mjs";
 import { bridgeOAuthAuth, loginBridge } from "./mcp-bridge-oauth.mjs";
 import { bridgeOAuthStore, oauthStatePath } from "./mcp-bridge-oauth-store.mjs";
 import { confirmCertificate, defaultDirectTls, directTlsError, discoverCertificate, pinnedTls } from "./mcp-direct-tls.mjs";
+import { validateLanHttpUrl } from "./lan-http.mjs";
+import { createPlainHttpMcpTransport } from "./mcp-plain-http.mjs";
 
-const directEntry = Symbol("Codey direct HTTPS MCP");
+const directEntry = Symbol("Codey direct MCP");
 const directStore = (ctx, optional = false) => bridgeStore(ctx.cwd, { direct: true, optional });
 const tlsOptions = (record) => record.pem ? pinnedTls(new URL(record.url), record.pem) : defaultDirectTls();
 
@@ -20,9 +22,10 @@ export function loadWithDirectMcp(ctx) {
 		config.errors.push(...saved.errors);
 		const names = new Set(config.servers.map(({ name }) => bridgeNamespace(name)));
 		for (const record of saved.entries) {
+			if (record.httpApprovedUrl && ctx.mode !== "tui") continue;
 			const namespace = bridgeNamespace(record.name);
 			if (names.has(namespace)) {
-				config.errors.push(`Direct HTTPS MCP server "${record.name}" conflicts with an existing server and was skipped.`);
+				config.errors.push(`Direct MCP server "${record.name}" conflicts with an existing server and was skipped.`);
 				continue;
 			}
 			// Declare transport-owned authentication to Pi. The custom transport supplies its own
@@ -32,7 +35,7 @@ export function loadWithDirectMcp(ctx) {
 			names.add(namespace);
 		}
 	} catch (error) {
-		config.errors.push(`Could not load saved direct HTTPS MCP servers: ${error.message}`);
+		config.errors.push(`Could not load saved direct MCP servers: ${error.message}`);
 	}
 	return config;
 }
@@ -62,6 +65,7 @@ function directTransport(record, authProvider, probe = false) {
 export function createDirectTransport(entry) {
 	const record = entry[directEntry];
 	if (!record) return;
+	if (record.httpApprovedUrl) return createPlainHttpMcpTransport(record.url);
 	const auth = bridgeOAuthAuth(new URL(record.url), record.pem, oauthStatePath(record), () => {}, tlsOptions(record));
 	const guidance = `Run /mcp direct login ${record.name} to sign in to this HTTPS MCP server.`;
 	return directTransport(record, {
@@ -77,8 +81,9 @@ export function createDirectTransport(entry) {
 async function probeService(record) {
 	const client = new McpClient({ name: "Codey", version: "1", requestTimeoutMs: 10_000 });
 	try {
-		await client.connect(directTransport(record, undefined, true));
+		await client.connect(record.httpApprovedUrl ? createPlainHttpMcpTransport(record.url, true) : directTransport(record, undefined, true));
 	} catch (error) {
+		if (record.httpApprovedUrl) throw error;
 		if (error instanceof McpAuthRequiredError) return parseWwwAuthenticate(error.wwwAuthenticate);
 		throw new Error("Could not initialize the HTTPS MCP endpoint. Check the URL and server status.");
 	} finally {
@@ -100,15 +105,33 @@ async function signIn(record, challenge, ctx, store) {
 }
 
 async function addDirect(pi, ctx, store) {
-	const input = await ctx.ui.input("New direct HTTPS MCP server name");
+	const input = await ctx.ui.input("New direct MCP server name");
 	if (input === undefined) return;
 	const name = bridgeName(input.trim());
 	const conflicts = () => [...loadWithDirectMcp(ctx).servers, ...pi.getMcpServers()]
 		.some((entry) => bridgeNamespace(entry.name) === bridgeNamespace(name));
 	if (conflicts()) throw new Error("An MCP server already uses that name.");
-	const endpoint = await ctx.ui.input("HTTPS MCP endpoint (no credentials or query)");
+	const endpoint = await ctx.ui.input("MCP endpoint (HTTPS or local unauthenticated HTTP; no credentials or query)");
 	if (endpoint === undefined) return;
-	const url = new URL(bridgeEndpoint(endpoint.trim()));
+	const address = endpoint.trim();
+	if (/^http:/i.test(address)) {
+		const url = validateLanHttpUrl(address).href;
+		const allow = "Allow unauthenticated HTTP for this endpoint";
+		if (await ctx.ui.select([
+			"Connect to this MCP endpoint over plain HTTP?",
+			`Endpoint: ${url}`,
+			"Tool arguments and results travel without encryption. Use a trusted local service.",
+			"Servers that require OAuth, tokens, or authentication headers need HTTPS.",
+		].join("\n"), ["Cancel", allow], { blockedKind: "permission" }) !== allow) return;
+		const record = { url, httpApprovedUrl: url };
+		await probeService(record);
+		if (conflicts()) throw new Error("An MCP server already uses that name.");
+		store.add(name, record);
+		ctx.ui.notify(`Added direct HTTP MCP server "${name}".`, "info");
+		await ctx.reload();
+		return;
+	}
+	const url = new URL(bridgeEndpoint(address));
 	const candidate = await discoverCertificate(url);
 	if (candidate) {
 		const approve = "Fingerprint matches — trust and add this service";
@@ -135,18 +158,23 @@ async function addDirect(pi, ctx, store) {
 
 async function manageDirect(pi, ctx, action, requested) {
 	if (ctx.mode !== "tui" || !ctx.hasUI) {
-		ctx.ui.notify("Manage direct HTTPS MCP servers in the interactive Codey terminal.", "warning");
+		ctx.ui.notify("Manage direct MCP servers in the interactive Codey terminal.", "warning");
 		return;
 	}
 	try {
 		const store = directStore(ctx);
 		if (action === "add") return await addDirect(pi, ctx, store);
-		const saved = store.list().entries;
-		if (!saved.length) return ctx.ui.notify("No saved direct HTTPS MCP servers.", "info");
-		const selection = requested ?? await ctx.ui.select("Choose a direct HTTPS MCP server", saved.map(({ name }) => name));
+		const entries = store.list().entries;
+		const saved = action === "remove" ? entries : entries.filter((entry) => !entry.httpApprovedUrl);
+		if (requested && action !== "remove" &&
+			entries.some((entry) => entry.httpApprovedUrl && entry.name.toLowerCase() === requested.toLowerCase())) {
+			throw new Error("Use HTTPS for authenticated MCP.");
+		}
+		if (!saved.length) return ctx.ui.notify(`No saved direct ${action === "remove" ? "" : "HTTPS "}MCP servers.`, "info");
+		const selection = requested ?? await ctx.ui.select("Choose a direct MCP server", saved.map(({ name }) => name));
 		if (!selection) return;
 		const record = saved.find(({ name }) => name.toLowerCase() === selection.toLowerCase());
-		if (!record) throw new Error("No saved direct HTTPS MCP server has that name.");
+		if (!record) throw new Error("No saved direct MCP server has that name.");
 		if (action === "login") {
 			const challenge = await probeService(record);
 			if (!challenge) return ctx.ui.notify("This MCP endpoint did not request authentication.", "info");
@@ -155,17 +183,20 @@ async function manageDirect(pi, ctx, action, requested) {
 			const remove = action === "remove";
 			const confirm = remove ? "Remove service and its saved trust" : "Sign out of this service";
 			if (await ctx.ui.select(`${record.name}\n${record.url}`, ["Cancel", confirm], { blockedKind: "permission" }) !== confirm) return;
-			const grant = bridgeOAuthStore(oauthStatePath(record));
-			await grant.locked(() => {
-				grant.remove();
-				if (remove) store.remove(record.name);
-			});
+			if (record.httpApprovedUrl) store.remove(record.name);
+			else {
+				const grant = bridgeOAuthStore(oauthStatePath(record));
+				await grant.locked(() => {
+					grant.remove();
+					if (remove) store.remove(record.name);
+				});
+			}
 		}
 		ctx.ui.notify(action === "login" ? `Signed in to "${record.name}".` :
 			action === "remove" ? `Removed "${record.name}".` : `Signed out of "${record.name}".`, "info");
 		await ctx.reload();
 	} catch (error) {
-		ctx.ui.notify(`Direct HTTPS MCP: ${error.message}`, "error");
+		ctx.ui.notify(`Direct MCP: ${error.message}`, "error");
 	}
 }
 
@@ -174,7 +205,7 @@ export function withDirectCommands(factory) {
 		if (name !== "mcp") return pi.registerCommand(name, command);
 		return pi.registerCommand(name, {
 			...command,
-			description: `${command.description}; use /mcp add for direct HTTPS servers`,
+			description: `${command.description}; use /mcp add for direct HTTPS or unauthenticated local HTTP servers`,
 			getArgumentCompletions(prefix) {
 				const input = prefix.trimStart();
 				const base = command.getArgumentCompletions?.(prefix) ?? [];
@@ -194,7 +225,7 @@ export function withDirectCommands(factory) {
 				if (direct) return manageDirect(pi, ctx, direct[1], direct[2]);
 				if (!input && ctx.mode === "tui" && ctx.hasUI) {
 					const manage = "Manage MCP servers";
-					const add = "Add direct HTTPS server";
+					const add = "Add direct MCP server";
 					const login = "Sign in to a direct HTTPS server";
 					const bridges = "Manage local Node bridges";
 					const choice = await ctx.ui.select("Codey MCP", [manage, add, login, bridges]);
