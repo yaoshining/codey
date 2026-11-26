@@ -5,11 +5,16 @@ import { lockSync } from "proper-lockfile";
 import { authentication, protocols, validModelId } from "./provider-protocols.mjs";
 import { authorizedProviderEndpoint } from "./provider-endpoint.mjs";
 
-const validName = /^[a-z][a-z0-9_-]{0,39}$/;
+const validName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
 
-export function providerId(value) {
-	if (typeof value !== "string" || !validName.test(value)) throw new Error("Use a provider ID starting with a lowercase letter, with up to 40 letters, digits, hyphens or underscores.");
-	return value;
+export function providerIdentity(displayName) {
+	if (typeof displayName !== "string" || !validName.test(displayName)) throw new Error("Use a provider name starting with an ASCII letter, with up to 40 letters, digits, hyphens or underscores.");
+	return { id: displayName.toLowerCase(), displayName };
+}
+
+function profileId(file) {
+	const name = file.slice(0, -5);
+	if (file.slice(-5).toLowerCase() === ".json" && validName.test(name)) return name.toLowerCase();
 }
 
 export function providerKey(value) {
@@ -57,24 +62,37 @@ export function providerStore(home, workspace) {
 	function reserved(id) {
 		const models = read(join(agent, "models.json"));
 		const auth = read(join(agent, "auth.json"));
-		return (models && Object.hasOwn(parse(models)?.providers ?? {}, id)) || (auth && Object.hasOwn(parse(auth) ?? {}, id));
+		const ids = [...Object.keys(models ? parse(models)?.providers ?? {} : {}), ...Object.keys(auth ? parse(auth) ?? {} : {})];
+		return ids.some((configuredId) => configuredId.toLowerCase() === id);
 	}
+	const hasCaseAlias = (files, id) => files.some((file) => file !== `${id}.json` && profileId(file) === id);
 	return {
+		has(id) {
+			return directory() && readdirSync(folder).some((file) => profileId(file) === id);
+		},
 		list() {
 			const entries = [], errors = [];
 			if (!directory()) return { entries, errors };
-			for (const file of readdirSync(folder).sort()) {
-				const id = file.slice(0, -5);
-				if (!file.endsWith(".json") || !validName.test(id)) continue;
+			const files = readdirSync(folder).sort();
+			const aliases = new Set();
+			for (const file of files) {
+				const id = profileId(file);
+				if (id !== undefined && file !== `${id}.json`) aliases.add(id);
+			}
+			for (const file of files) {
+				const id = profileId(file);
+				if (id === undefined || file !== `${id}.json`) continue;
 				try {
-					if (reserved(id)) throw new Error("Its ID is used by models.json or auth.json.");
+					if (reserved(id) || aliases.has(id)) throw new Error("Its ID is already used.");
 					const revision = read(join(folder, file), true);
 					if (!revision) continue;
 					const raw = parse(revision);
 					if (!protocols.has(raw.api) || !authentication.has(raw.auth) || !Array.isArray(raw.models) ||
 						!raw.models.length || raw.models.length > 500 || !raw.models.every(validModelId)) throw new Error("Invalid profile fields.");
 					const { baseUrl, lanHttp } = authorizedProviderEndpoint(raw);
-					const profile = { id, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
+					const identity = providerIdentity(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
+					if (identity.id !== id) throw new Error("The display name does not match the provider ID.");
+					const profile = { ...identity, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
 					if (lanHttp) profile.lanHttpApprovedUrl = raw.lanHttpApprovedUrl;
 					if (raw.auth === "key") profile.key = providerKey(raw.key);
 					entries.push({ profile, revision });
@@ -88,11 +106,12 @@ export function providerStore(home, workspace) {
 		save(profile, revision) {
 			authorizedProviderEndpoint(profile);
 			directory(true);
-			const id = providerId(profile.id);
+			const { id } = providerIdentity(profile.displayName);
+			if (profile.id !== id) throw new Error("The display name does not match the provider ID.");
 			const target = join(folder, `${id}.json`);
 			const release = lockSync(folder);
 			try {
-				if (reserved(id) || read(target, true) !== revision) throw new Error("The provider already exists or changed in another session. Start the wizard again.");
+				if (reserved(id) || hasCaseAlias(readdirSync(folder), id) || read(target, true) !== revision) throw new Error("The provider already exists or changed in another session. Start the wizard again.");
 				const temp = mkdtempSync(join(folder, ".write-"));
 				try {
 					const staged = join(temp, "profile");
