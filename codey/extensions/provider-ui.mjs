@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
-import { authentication, discoverModels, protocols, providerFromProfile, validModelId } from "./provider-protocols.mjs";
+import { authentication, discoverModels, protocols, providerFromProfile, supportedEffortValues, validModelId } from "./provider-protocols.mjs";
 import { providerIdentity, providerKey, providerStore } from "./provider-store.mjs";
 import { providerEndpoint } from "./provider-endpoint.mjs";
 
@@ -38,7 +38,7 @@ function providerInput(ui, title, { initial = "", secret = false } = {}) {
 	}, { blocked: { kind: "question", message: title } });
 }
 
-function picker(ui, catalog, selected, catalogStatus) {
+function picker(ui, catalog, selected, catalogStatus, title = "Select catalog models") {
 	return ui.custom((tui, _theme, keys, done) => {
 		const filter = new Input({ prompt: "Search: " });
 		const chosen = new Set(selected);
@@ -68,7 +68,7 @@ function picker(ui, catalog, selected, catalogStatus) {
 			render(width) {
 				const filtered = matching();
 				const first = Math.max(0, cursor - rows + 1);
-				const lines = ["Select catalog models", ...(catalogStatus ? [catalogStatus] : []), ...filter.render(width), ...filtered.slice(first, first + rows)
+				const lines = [title, ...(catalogStatus ? [catalogStatus] : []), ...filter.render(width), ...filtered.slice(first, first + rows)
 					.map((id, index) => `${index + first === cursor ? ">" : " "} [${chosen.has(id) ? "x" : " "}] ${id}`),
 					`${chosen.size} selected · ${hint("tui.select.confirm")} toggle · ${hint("app.models.save")} done · ${hint("tui.select.cancel")} back`,
 					...(selectionLimit ? ["Up to 500 models can be saved per provider."] : [])];
@@ -173,7 +173,12 @@ async function draft(ui, identity, previous, action) {
 		}
 	}
 	profile.models = await chooseModels(ui, previous?.models ?? [], profile);
-	if (profile.models) return profile;
+	if (!profile.models) return;
+	if (previous?.reasoningLevels && previous.baseUrl === baseUrl && previous.api === api) {
+		const entries = Object.entries(previous.reasoningLevels).filter(([model]) => profile.models.includes(model));
+		if (entries.length) profile.reasoningLevels = Object.fromEntries(entries);
+	}
+	return profile;
 }
 
 export default function customProviders(pi) {
@@ -209,7 +214,7 @@ export default function customProviders(pi) {
 				const store = hostStore(ctx.cwd);
 				if (!store) throw new Error("The wizard needs the default ~/.codey/agent outside the workspace.");
 				const existing = store.list().entries.filter(({ profile }) => !builtins.has(profile.id));
-				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key", "Rename display name", "Delete provider"] : [])];
+				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key", "Rename display name", "Delete provider", "Configure model reasoning"] : [])];
 				const action = await ui.select("Custom providers", actions);
 				if (action === undefined) return;
 				const adding = action === "Add provider";
@@ -229,7 +234,7 @@ export default function customProviders(pi) {
 					}
 				};
 				checkConflict();
-				if (action === "Rename display name" || action === "Delete provider") {
+				if (action === "Rename display name" || action === "Delete provider" || action === "Configure model reasoning") {
 					await manageProvider(action, entry, store, ctx);
 					return;
 				}
@@ -237,7 +242,9 @@ export default function customProviders(pi) {
 				if (!profile) return;
 				const old = entry?.profile;
 				const authChange = old?.auth === "key" && (profile.auth !== "key" || profile.key !== old.key || profile.baseUrl !== old.baseUrl || profile.api !== old.api);
-				const summary = `${providerLabel(profile)}\n${protocols.get(profile.api).label}\n${profile.baseUrl}\n${authentication.get(profile.auth).label}\n${profile.models.length} model IDs${authChange ? "\nThis replaces the saved authentication for this profile." : ""}`;
+				const hadReasoning = Object.keys(old?.reasoningLevels ?? {}).length;
+				const droppedReasoning = Object.keys(profile.reasoningLevels ?? {}).length < hadReasoning;
+				const summary = `${providerLabel(profile)}\n${protocols.get(profile.api).label}\n${profile.baseUrl}\n${authentication.get(profile.auth).label}\n${profile.models.length} model IDs${authChange ? "\nThis replaces the saved authentication for this profile." : ""}${droppedReasoning ? "\nChanged routes or removed models lose their saved reasoning levels." : ""}`;
 				if (await ui.select(`Save custom provider?\n${summary}`, ["Cancel", "Save provider"], { blockedKind: "permission" }) !== "Save provider") return;
 				checkConflict();
 				store.save(profile, entry?.revision);
@@ -262,6 +269,22 @@ export default function customProviders(pi) {
 		}
 
 		checkRuntime();
+		if (action === "Configure model reasoning") {
+			const allowed = supportedEffortValues(profile.api);
+			if (!allowed.length) throw new Error("Anthropic Messages uses a different reasoning configuration and is unavailable here.");
+			const model = await ui.select("Choose an existing model", profile.models);
+			if (model === undefined) return;
+			const saved = Object.hasOwn(profile.reasoningLevels ?? {}, model) ? profile.reasoningLevels[model] : [];
+			const levels = await picker(ui, allowed, saved, "Select only levels supported by this route. Save no levels to clear.", "Select supported reasoning levels");
+			if (!levels) return;
+			const summary = levels.length ? levels.join(", ") : "Gateway default (clear reasoning configuration)";
+			if (await ui.select(`Save reasoning levels for ${model}?\n${summary}`, ["Cancel", "Save reasoning levels"], { blockedKind: "permission" }) !== "Save reasoning levels") return;
+			checkRuntime();
+			const reasoningLevels = store.setModelReasoning(id, revision, model, levels);
+			register({ ...profile, reasoningLevels });
+			ui.notify(`Reasoning settings saved for ${id}/${model}. Use /thinking to choose a supported level.`, "info");
+			return;
+		}
 		if (action === "Rename display name") {
 			const input = await providerInput(ui, `Display name for ${id}`, { initial: profile.displayName });
 			if (input === undefined || input.trim() === profile.displayName) return;

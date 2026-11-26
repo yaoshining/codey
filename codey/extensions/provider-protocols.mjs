@@ -2,6 +2,7 @@
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { THINKING_LEVEL_OPTIONS } from "../../packages/coding-agent/src/core/defaults.ts";
 import { authorizedProviderEndpoint, fetchProvider } from "./provider-endpoint.mjs";
 
 export const protocols = new Map([
@@ -9,6 +10,12 @@ export const protocols = new Map([
 	["openai-responses", { label: "OpenAI Responses", inference: "/responses", catalog: "/models", create: openAIResponsesApi }],
 	["anthropic-messages", { label: "Anthropic Messages", inference: "/v1/messages", catalog: "/v1/models", create: anthropicMessagesApi }],
 ]);
+
+export function supportedEffortValues(api) {
+	if (api === "openai-responses") return THINKING_LEVEL_OPTIONS.filter((level) => level !== "off");
+	if (api === "openai-completions") return ["low", "medium", "high"];
+	return [];
+}
 
 // A future OAuth adapter must own token resolution and refresh for its provider.
 export const authentication = new Map([
@@ -82,11 +89,31 @@ export function providerFromProfile(profile) {
 	const source = profile.auth === "none" ? "no authentication (Codey /provider)" : "Codey /provider";
 	const displayName = profile.displayName ?? profile.id;
 	// Pi's model selector can display a model label alongside the canonical provider ID.
-	const models = profile.models.map((id) => ({
-		api: profile.api, provider: profile.id, id, name: displayName === profile.id ? id : `${displayName}/${id}`, baseUrl: profile.baseUrl,
-		reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 32000, maxTokens: 4096,
-	}));
+	const models = profile.models.map((id) => {
+		const levels = Object.hasOwn(profile.reasoningLevels ?? {}, id) ? profile.reasoningLevels[id] : undefined;
+		const thinkingLevelMap = levels && Object.fromEntries(
+			THINKING_LEVEL_OPTIONS.filter((level) => level !== "off").map((level) => [level, levels.includes(level) ? level : null]),
+		);
+		return {
+			api: profile.api, provider: profile.id, id, name: displayName === profile.id ? id : `${displayName}/${id}`,
+			// Pi RPC serializes these descriptors directly. Supply the URL only to the private adapter.
+			baseUrl: "", reasoning: Boolean(levels), ...(levels ? { thinkingLevelMap } : {}),
+			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32000, maxTokens: 4096,
+		};
+	});
+	function requestModel(model) {
+		const privateModel = { ...model, baseUrl: profile.baseUrl };
+		if (model.reasoning) {
+			// In the UI, off means use the gateway default. Pi's Responses adapter
+			// would otherwise send "none". Only the adapter's copy suppresses that field.
+			privateModel.thinkingLevelMap = { ...model.thinkingLevelMap, off: null };
+			if (profile.api === "openai-completions") {
+				privateModel.compat = { ...model.compat, thinkingFormat: "openai", supportsReasoningEffort: true };
+			}
+		}
+		return privateModel;
+	}
 	// The SDKs require a local placeholder before producing a request. It never reaches
 	// the network: the guarded fetch replaces all authentication headers at dispatch.
 	const requestOptions = (options) => ({ ...options, apiKey: "codey-managed-credential", fetch });
@@ -95,8 +122,8 @@ export function providerFromProfile(profile) {
 		id: profile.id, name: displayName.toLowerCase() === profile.id ? displayName : profile.id, baseUrl: profile.baseUrl,
 		auth: { apiKey: { name: source, check: async () => ({ type: "api_key", source }), resolve: async () => ({ auth: {}, source }) } },
 		getModels: () => models,
-		stream: (model, context, options) => streams.stream(model, context, requestOptions(options)),
-		streamSimple: (model, context, options) => streams.streamSimple(model, context, requestOptions(options)),
+		stream: (model, context, options) => streams.stream(requestModel(model), context, requestOptions(options)),
+		streamSimple: (model, context, options) => streams.streamSimple(requestModel(model), context, requestOptions(options)),
 	};
 }
 

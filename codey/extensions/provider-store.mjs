@@ -2,7 +2,7 @@
 import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { lockSync } from "proper-lockfile";
-import { authentication, protocols, validModelId } from "./provider-protocols.mjs";
+import { authentication, protocols, supportedEffortValues, validModelId } from "./provider-protocols.mjs";
 import { authorizedProviderEndpoint } from "./provider-endpoint.mjs";
 
 const validName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
@@ -43,6 +43,17 @@ function read(path, privateFile = false) {
 
 function parse(raw) {
 	try { return JSON.parse(raw.replace(/^\uFEFF/, "")); } catch { throw new Error("Provider configuration contains invalid JSON."); }
+}
+
+function validateReasoning(profile, settings = {}) {
+	if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Invalid model reasoning settings.");
+	const allowed = supportedEffortValues(profile.api);
+	return Object.fromEntries(Object.entries(settings).map(([model, levels]) => {
+		if (!profile.models.includes(model) || !Array.isArray(levels) || !levels.length ||
+			levels.length > allowed.length || new Set(levels).size !== levels.length ||
+			!levels.every((level) => allowed.includes(level))) throw new Error("Invalid or unsupported model reasoning levels.");
+		return [model, allowed.filter((level) => levels.includes(level))];
+	}));
 }
 
 export function providerStore(home, workspace) {
@@ -126,6 +137,7 @@ export function providerStore(home, workspace) {
 					const { baseUrl, lanHttp } = authorizedProviderEndpoint(raw);
 					const displayName = validateDisplayName(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
 					const profile = { id, displayName, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
+					if (raw.reasoningLevels !== undefined) profile.reasoningLevels = validateReasoning(profile, raw.reasoningLevels);
 					if (lanHttp) profile.lanHttpApprovedUrl = raw.lanHttpApprovedUrl;
 					if (raw.auth === "key") profile.key = providerKey(raw.key);
 					entries.push({ profile, revision });
@@ -140,7 +152,21 @@ export function providerStore(home, workspace) {
 		save(profile, revision) {
 			authorizedProviderEndpoint(profile);
 			validateDisplayName(profile.displayName);
+			validateReasoning(profile, profile.reasoningLevels);
 			update(profile.id, revision, (target) => write(target, profile, revision === undefined));
+		},
+		setModelReasoning(id, revision, model, levels) {
+			if (typeof revision !== "string") throw new Error(changed);
+			if (!Array.isArray(levels)) throw new Error("Invalid model reasoning levels.");
+			const raw = parse(revision);
+			if (!raw.models.includes(model)) throw new Error("Choose an existing model from this provider.");
+			const entries = validateReasoning(raw, raw.reasoningLevels);
+			delete entries[model];
+			const reasoningLevels = validateReasoning(raw, levels.length ? { ...entries, [model]: levels } : entries);
+			if (Object.keys(reasoningLevels).length) raw.reasoningLevels = reasoningLevels;
+			else delete raw.reasoningLevels;
+			update(id, revision, (target) => write(target, raw, false));
+			return raw.reasoningLevels;
 		},
 		renameDisplayName(id, revision, name) {
 			const displayName = validateDisplayName(name);
