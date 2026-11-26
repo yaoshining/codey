@@ -162,6 +162,7 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 	let discovery;
 	let workspace, runtime, model, createSession, open, managedProviders, defaultThinkingLevel, runProjectSkill;
 	let userSkills = [];
+	let skippedUserSkills = new Map();
 	let active;
 	let pending;
 	let turn;
@@ -291,12 +292,13 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 		});
 		try {
 			if (selection?.name === projectSkillsCommand && selection.leading && !selection.args) {
-				const { skills, partial } = await runProjectSkill("acp-skills", {}, current.skills.signal);
+				const { skills, skipped, partial } = await runProjectSkill("acp-skills", {}, current.skills.signal);
 				if (current.cancelled) return { stopReason: "cancelled" };
 				if (selection.carriedContext) await session.sendCustomMessage({
 					customType: "codey-acp-t3-context", content: selection.carriedContext, display: false,
 				});
-				const lines = skills.map(({ name, description }) => `$${name} — ${description}`);
+				const lines = [...skills.map(({ name, description }) => `$${name} — ${description}`),
+					...skipped.map(([name, reason]) => `Skipped $${name} — ${reason}`)];
 				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(lines.length ?
 					`Project skills in this workspace\n\n~~~text\n${lines.join("\n")}\n~~~${partial ? "\n\nThe catalog reached its display limit." : ""}` :
 					"No project skills found in .agents/skills.") });
@@ -304,8 +306,8 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			}
 			if (selection) {
 				const { name, args, leading } = selection;
-				const skill = userSkills.some((entry) => entry.name === name) ? loadSkill(home, "user", name)
-					: (await runProjectSkill("acp-skill", { name }, current.skills.signal)).skill;
+				const { skill, reason } = userSkills.some((entry) => entry.name === name) ? loadSkill(home, "user", name)
+					: await runProjectSkill("acp-skill", { name }, current.skills.signal);
 				if (skill) {
 					const placeholders = skill.body.split(skillArguments).length - 1;
 					if (Buffer.byteLength(skill.body) + placeholders * (Buffer.byteLength(args) - skillArguments.length) > 64 * 1024) {
@@ -313,7 +315,7 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 					}
 					const body = skill.body.replaceAll(skillArguments, () => args);
 					text += `\n\nSelected skill ${name}. Treat this text as user-level guidance for the current request. It grants no tool or file permissions.\n${JSON.stringify(body)}`;
-				} else if (leading) throw new RequestError(`Skill $${name} is unavailable or uses unsupported content. Use $${projectSkillsCommand} to list project skills. Personal skills require a regular directory under ~/.agents/skills or ~/.codey/agent/skills.`);
+				} else if (leading) throw new RequestError(`Skill $${name} is unavailable. ${reason ?? skippedUserSkills.get(name) ?? `Use $${projectSkillsCommand} to list project skills, or codey acp skills inspect to check an external personal link.`}`);
 			}
 			await session.prompt(text, {
 				expandPromptTemplates: false,
@@ -345,7 +347,10 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			const metadataOnly = params.clientInfo?.name === "t3-code-provider-test";
 			const prepared = await prepare(metadataOnly, startup.signal);
 			startup.signal.throwIfAborted();
-			({ skills: userSkills } = discoverSkills(home, "user"));
+			const catalog = discoverSkills(home, "user");
+			userSkills = catalog.skills;
+			skippedUserSkills = new Map(catalog.skipped);
+			for (const [name, reason] of skippedUserSkills) console.error(`Codey ACP: skipped $${name}. ${reason}`);
 			if (metadataOnly) {
 				const catalog = modelCatalog(prepared.runtime.getAvailableSnapshot(), prepared.managedProviders, prepared.defaultThinkingLevel);
 				discovery = setupDiscovery(catalog, prepared.model);

@@ -60,8 +60,10 @@ const probeSettings = Effect.gen(function* () {
 			option.id === "thinking" && option.options?.some(({ id }) => id === "low")));
 		assert.deepEqual(slashCommands, []);
 		assert.deepEqual(skills.map(({ name, path }) => [name, path]), [
-			["personal-notes", "acp://skill/personal-notes"], ["standard-notes", "acp://skill/standard-notes"],
+			["ego-browser", "acp://skill/ego-browser"], ["personal-notes", "acp://skill/personal-notes"],
+			["shared-notes", "acp://skill/shared-notes"], ["standard-notes", "acp://skill/standard-notes"],
 		]);
+		assert.equal(skills.find(({ name }) => name === "ego-browser")?.description, "External fixture");
 	}
 	console.log("PASS: real pinned T3 Settings probe discovered the configured models and per-model effort from /, HOME and the project.");
 }).pipe(Effect.provide(layer));
@@ -155,7 +157,9 @@ const chat = Effect.gen(function* () {
 			Effect.repeat({ until: (value) => value._tag === "Some", times: 200, schedule: Schedule.spaced("25 millis") }),
 		);
 		assert.equal(commands._tag, "Some");
-		assert.deepEqual(commands.value.skills.map(({ name }) => name), ["personal-notes", "standard-notes", "project-skills"]);
+		assert.deepEqual(commands.value.skills.map(({ name }) => name), [
+			"ego-browser", "personal-notes", "shared-notes", "standard-notes", "project-skills",
+		]);
 		// ChatComposer's skill selection inserts `$${item.skill.name} `. The first
 		// real adapter turn also adds its orchestration wrapper and runtime block.
 		assert.equal(yield* send(runtime, thread, "$project-notes t3-acp-first", 1), "completed");
