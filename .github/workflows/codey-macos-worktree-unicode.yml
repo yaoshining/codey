@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 0c55fe67eaf6b5b01b231d568463d6891c8ae1e9
+          ref: e2e7f7cb400d9a65d39da00c9e6801c65d58d650
           persist-credentials: false
       - name: Select Homebrew Node 26
         run: |
@@ -41,6 +41,7 @@ jobs:
       - name: Test sandbox and ordinary worktree regression
         run: |
           node --test codey/test/worktree.test.mjs codey/test/macos-sandbox.test.mjs codey/test/macos-review.test.mjs codey/test/review.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/worktree.integration.py ./codey/bin/codey
           "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/integration.py ./codey/bin/codey
       - name: Inspect synthetic sandbox denials after a failure
         if: failure()
