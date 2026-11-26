@@ -14,9 +14,15 @@ codey --sandbox workspace-write
 codey --sandbox workspace-write --workspace /path/to/task
 ```
 
-允许编辑工作区及私有临时目录，包括现有 worktree 和未提交文件。用户 Home、常见凭据文件和 Git 管理路径受保护。可用 `!` 或 `!!` 执行离线命令，`!!` 的输出不进入模型上下文。退出后不会保存这次沙箱会话。MCP、扩展、项目资源自动发现、附件及 RPC/T3 不可用。缺少 Seatbelt 或启动检查失败时，Codey 会停止。 [macOS 详细边界](../../codey/sandbox/macos/README.md)
+允许编辑工作区及私有临时目录，包括现有 worktree 和未提交文件。用户 Home、常见凭据文件和 Git 管理路径受保护。可用 `!` 或 `!!` 执行离线命令，`!!` 的输出不进入模型上下文。退出后不会保存这次沙箱会话。MCP、扩展、项目资源自动发现和附件不可用。缺少 Seatbelt 或启动检查失败时，Codey 会停止。 [macOS 详细边界](../../codey/sandbox/macos/README.md)
 
 在带有本地 `.git` 目录的仓库根目录运行沙箱，输入 `/review` 可流式审查暂存、未暂存和未忽略的未跟踪文本改动。审查使用项目的忽略规则和 `.git/info/exclude`。收集改动的 Git worker 只能读取工作区和指定 Git 元数据，模型经宿主收取有大小限制的补丁，审查轮没有工具。结果直接显示在当前对话，Ctrl+C 可中止并继续输入。Linked worktree、带基准分支的审查、受保护文件、符号链接和非文本改动不受支持。请把其他敏感资料放在工作区外。普通模式 `/review` 仍支持原有范围。
+
+### macOS 沙箱 RPC 与 T3
+
+在任务目录用 `codey --sandbox workspace-write --mode rpc` 启动 JSONL 服务。客户端可查看可用模型、选择模型、发送文本、接收流式事件和取消。默认会话保存在宿主的 `~/.codey/agent/sandbox-rpc/`，按工作区隔离。用 `--no-session` 可只在内存运行。恢复只接受同一工作区内由此入口创建的会话文件。
+
+RPC 的文件和 Bash 工具仅由 Seatbelt 内的模型工具调用，工作区在启动时确定。RPC 完全关闭工具网络，包括已有白名单的 HTTPS 读取。附件、扩展、MCP、项目资源、手动 Bash、队列消息和斜杠命令均不可用。模型请求仍经受信任宿主发出。T3 的设置方式见 [T3 Code](Workflow.md#t3-code)。
 
 ### 在会话中管理工作树
 

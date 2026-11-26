@@ -53,7 +53,7 @@ export function managedProfile() {
 `;
 }
 
-export async function openSeatbelt(workspace, hostHome) {
+export async function openSeatbelt(workspace, hostHome, signal) {
 	if (!lstatSync(backend, { throwIfNoEntry: false })?.isFile()) {
 		throw new Error("The macOS Seatbelt launcher /usr/bin/sandbox-exec is unavailable.");
 	}
@@ -142,7 +142,7 @@ export async function openSeatbelt(workspace, hostHome) {
 		const hostProbe = join(hostDir, "denied-probe");
 		writeFileSync(hostProbe, "sandbox probe", { mode: 0o600 });
 		if (readFileSync(hostProbe, "utf8") !== "sandbox probe") throw new Error("Host preflight file is unreadable.");
-		const result = await execute("ready", { hostProbe });
+		const result = await execute("ready", { hostProbe }, signal);
 		if (!result.ready) throw new Error("Seatbelt worker did not complete its startup check.");
 		return { execute, review, close, hostDir };
 	} catch (error) {

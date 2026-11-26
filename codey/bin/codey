@@ -29,9 +29,9 @@ for ARG in "$@"; do
   esac
 done
 if [[ -n "$HAS_MACOS_SANDBOX" ]]; then
+  unset CODEY_SANDBOX_T3
   if [[ "${0##*/}" == codey-t3 ]]; then
-    printf '%s\n' 'Codey: the macOS sandbox is available only in the Codey terminal.' >&2
-    exit 1
+    export CODEY_SANDBOX_T3=1
   fi
   unset NODE_OPTIONS NODE_PATH
   RESOLVER_URL="$(node -p 'require("node:url").pathToFileURL(process.argv[1]).href' "$REPO_DIR/packages/coding-agent/src/experimental/source-resolver.ts")"

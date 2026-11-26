@@ -28,7 +28,7 @@ Omit `--workspace` to use the current directory. The list starts empty and is st
 
 `/review` streams a read-only review of staged, unstaged, and nonignored untracked text from the root of a local Git checkout. It uses Apple Git (Xcode or Command Line Tools), collects the patch in a separate offline Seatbelt worker and gives the selected host model one bounded request with no tools. Press Ctrl+C to cancel. The review does not write a report, change the checkout or index, or feed its patch into later conversation turns. It refuses protected paths, symlinks, hard-linked working files and non-text changes. The patch limit is 64 KiB. Keep other secrets outside the workspace.
 
-The review worker reads the local index, HEAD, branch refs, object database and repository excludes. It uses a separate scratch Git configuration without repository filters, hooks, external diff or host Git configuration. Workspace and Git metadata writes are denied. Review requires a standard SHA-1 checkout with a local `.git` directory. Linked worktree review and base-branch review are unavailable. RPC/T3, extensions, MCP, automatic package or project resource discovery and attachments are unavailable. Codey stops if the Seatbelt launcher or its startup check fails.
+The review worker reads the local index, HEAD, branch refs, object database and repository excludes. It uses a separate scratch Git configuration without repository filters, hooks, external diff or host Git configuration. Workspace and Git metadata writes are denied. Review requires a standard SHA-1 checkout with a local `.git` directory. Linked worktree review and base-branch review are unavailable. Extensions, MCP, automatic package or project resource discovery and attachments are unavailable. Codey stops if the Seatbelt launcher or its startup check fails.
 
 Start from the source repository root and use `/worktree` to create a managed checkout from the current HEAD. You can copy the current in-memory conversation or start an empty one. The new checkout does not copy uncommitted files. Browse can switch to another managed checkout, copy its canonical path, or delete it if it is inactive and clean, including ignored and untracked files. Git branches are kept. A failed switch leaves the previous sandbox and conversation active.
 
@@ -43,3 +43,13 @@ python3 codey/sandbox/macos/integration.py ./codey/bin/codey
 ```
 
 The test requires `pexpect`. Ordinary Codey and the Linux Docker sandbox remain available from their existing commands.
+
+## RPC
+
+Run `codey --sandbox workspace-write --mode rpc` from the selected workspace. Stdout carries Pi-compatible JSONL responses and streaming events; diagnostics go to stderr. The available commands are `get_state`, `get_commands`, `get_available_models`, `get_available_thinking_levels`, `set_model`, `set_thinking_level`, `set_session_name`, `prompt`, `abort`, `clear_queue`, `new_session`, `switch_session`, `get_entries`, `get_messages`, `get_last_assistant_text` and `get_session_stats`. Prompts are text-only, with one active turn at a time. Model file and shell calls remain inside Seatbelt. The network approval tool and its domain grants are unavailable in RPC.
+
+RPC stores conversations under the host's private `~/.codey/agent/sandbox-rpc` directory, keyed by canonical workspace. Only regular, private, same-workspace RPC sessions up to 16 MiB can reopen. `--no-session` runs in memory. Startup or protocol errors do not switch to ordinary Codey. T3's launch setup is documented in the [wiki](../../../docs/wiki/Workflow.md#t3-code).
+
+```bash
+python3 codey/sandbox/macos/rpc.integration.py ./codey/bin/codey
+```

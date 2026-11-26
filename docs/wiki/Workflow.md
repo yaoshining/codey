@@ -26,4 +26,8 @@ codey worktree delete <id>
 
 ## T3 Code
 
-在 T3 Code v0.1.11 的 Pi provider 设置中，**Binary path** 填运行 T3 服务的机器上 `codey-t3` 的绝对路径，默认 `~/.local/bin/codey-t3`。这里的 `~` 应替换成实际家目录。保存并刷新 provider。这个入口让 T3 的 `--version` 探测读到 Pi 运行时版本，平时调用仍用 Codey 的配置与 RPC。远程使用时，客户端本机的安装路径可能与 T3 服务端不同。原生 macOS 沙箱暂不支持 RPC/T3。 [T3 设置详情](../../codey/README.md#t3-code-v0111)
+在 T3 Code v0.1.11 的 Pi provider 设置中，**Binary path** 填运行 T3 服务的机器上 `codey-t3` 的绝对路径，默认 `~/.local/bin/codey-t3`。这里的 `~` 应替换成实际家目录。保存并刷新 provider。这个入口让 T3 的 `--version` 探测读到 Pi 运行时版本，平时调用仍用 Codey 的配置与 RPC。远程使用时，客户端本机的安装路径可能与 T3 服务端不同。[T3 设置详情](../../codey/README.md#t3-code-v0111)
+
+在运行 T3 服务的 Mac 上，可为 Pi provider 的 **Launch arguments** 加入 `--sandbox=workspace-write`，继续使用上述 `codey-t3` 路径。T3 会加上 `--mode rpc`。沙箱使用 T3 启动进程时指定的项目目录，由 Codey 的 Seatbelt 规则约束工具。请在普通 `codey` 完成登录。
+
+沙箱首版支持模型选择、文本对话、流式响应、取消及同工作区会话恢复。T3 自动附带的扩展不加载，T3 的审批交互、浏览器、附件、服务档位和跨工作区恢复不受支持。启用后，原有普通 Pi 会话应继续用普通入口打开。 [沙箱 RPC 边界](Sandbox.md#macos-沙箱-rpc-与-t3)

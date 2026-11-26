@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { createExtensionRuntime } from "../../../packages/coding-agent/src/core/extensions/loader.ts";
@@ -10,16 +10,19 @@ import { findInitialModel } from "../../../packages/coding-agent/src/core/model-
 import { createAgentSession } from "../../../packages/coding-agent/src/core/sdk.ts";
 import { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
+import { takeOverStdout } from "../../../packages/coding-agent/src/core/output-guard.ts";
 import { styleInfo, styleReviewMarker } from "../../branding.mjs";
 import { reviewSystemPrompt } from "../../extensions/review.mjs";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
 import { projectDomains } from "./project-domains.mjs";
 import { openSeatbelt } from "./seatbelt.mjs";
+import { runSandboxRpc } from "./rpc.mjs";
 import { toolDefinitions } from "./tools.mjs";
 import { worktreeMenu } from "./worktree-menu.mjs";
 
 const help = `Usage: codey --sandbox workspace-write [--workspace <directory>] [--provider <name> --model <id>]
+       codey --sandbox workspace-write --mode rpc [--workspace <directory>] [--no-session]
        codey --sandbox workspace-write [--workspace <directory>] --list-domains
        codey --sandbox workspace-write [--workspace <directory>] --allow-domain <hostname>
        codey --sandbox workspace-write [--workspace <directory>] --remove-domain <hostname>
@@ -74,11 +77,19 @@ function emptyResources() {
 	};
 }
 
-async function terminal() {
+async function launch() {
 	const { values } = parseArgs({
 		options: {
 			sandbox: { type: "string" },
 			workspace: { type: "string" },
+			mode: { type: "string" },
+			session: { type: "string" },
+			"no-session": { type: "boolean" },
+			"no-tools": { type: "boolean" },
+			"no-extensions": { type: "boolean" },
+			"no-approve": { type: "boolean" },
+			offline: { type: "boolean" },
+			extension: { type: "string", multiple: true },
 			provider: { type: "string" },
 			model: { type: "string" },
 			"list-domains": { type: "boolean" },
@@ -89,9 +100,20 @@ async function terminal() {
 	});
 	if (values.sandbox !== "workspace-write") throw new Error(help);
 	if (values.help) return console.log(help);
+	const rpc = values.mode === "rpc";
+	if (values.mode !== undefined && !rpc) throw new Error("Only --mode rpc is supported with workspace-write.");
+	const rpcOnly = ["session", "no-session", "no-tools", "no-extensions", "no-approve", "offline", "extension"];
+	if (!rpc && rpcOnly.some((flag) => values[flag] !== undefined)) throw new Error("RPC launch options require --mode rpc.");
+	if (values.session !== undefined && values["no-session"]) throw new Error("Choose a saved sandbox session or --no-session.");
+	if (values.extension && (process.env.CODEY_SANDBOX_T3 !== "1" ||
+		values.extension.length !== 1 || basename(values.extension[0]) !== "pi-t3-mcp-extension.ts")) {
+		throw new Error("Extensions are unavailable in the macOS sandbox.");
+	}
+	const wireWrite = rpc ? process.stdout.write.bind(process.stdout) : undefined;
+	if (rpc) takeOverStdout();
 	const management = [values["list-domains"], values["allow-domain"], values["remove-domain"]]
 		.filter((value) => value !== undefined).length;
-	if (management > 1 || (management && (values.provider !== undefined || values.model !== undefined))) {
+	if (management > 1 || (management && (rpc || values.provider !== undefined || values.model !== undefined))) {
 		throw new Error("Choose one project domain action without model options.");
 	}
 	if (management) {
@@ -109,7 +131,7 @@ async function terminal() {
 		return;
 	}
 	if (process.platform !== "darwin") throw new Error("workspace-write requires macOS Seatbelt. No tool was run.");
-	if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("An interactive Codey terminal is required. RPC/T3 is unavailable.");
+	if (!rpc && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("An interactive Codey terminal is required. Use --mode rpc for JSONL.");
 	if (Boolean(values.provider) !== Boolean(values.model)) throw new Error("Specify --provider and --model together.");
 
 	const workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
@@ -119,10 +141,18 @@ async function terminal() {
 	let runtime;
 	let input;
 	let initial;
+	const startup = new AbortController();
+	const startupSignals = rpc ? ["SIGTERM", "SIGINT", "SIGHUP"] : [];
+	const cancelStartup = () => startup.abort();
+	const finishedStartup = () => {
+		for (const signal of startupSignals) process.off(signal, cancelStartup);
+	};
+	for (const signal of startupSignals) process.on(signal, cancelStartup);
 	try {
-		initial = await openSeatbelt(workspace, home);
+		initial = await openSeatbelt(workspace, home, startup.signal);
 		const host = await hostModel(home, workspace, hostDir);
 		runtime = host.runtime;
+		startup.signal.throwIfAborted();
 		if (host.warning) console.error(host.warning);
 		let model = values.provider && runtime.getModel(values.provider, values.model);
 		if (values.provider && !model) throw new Error("The selected provider/model is unavailable.");
@@ -136,28 +166,45 @@ async function terminal() {
 			});
 			model = selection.model;
 		}
-		input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
-		const closed = new AbortController();
-		input.once("close", () => closed.abort());
-		function createSession(cwd, sandbox, current) {
-			const settings = SettingsManager.inMemory({ defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true });
-			const customTools = toolDefinitions(cwd).map((definition) => ({
+		const newSession = (cwd, sandbox, sessionManager, currentModel, extras = []) => {
+			const settingsManager = SettingsManager.inMemory({
+				defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true,
+				...(rpc ? { compaction: { enabled: false }, retry: { enabled: false } } : {}),
+			});
+			const customTools = values["no-tools"] ? [] : toolDefinitions(cwd).map((definition) => ({
 				...definition,
 				execute: async (_id, args, signal) => {
 					const { content, isError } = await sandbox.execute(definition.name, args, signal);
 					return { content, details: undefined, isError };
 				},
 			}));
-			customTools.push(httpsReadTool(terminalApproval(input, cwd, closed.signal), projectDomains(home, cwd).has));
+			customTools.push(...extras);
+			return createAgentSession({
+				cwd, agentDir: host.agentDir, modelRuntime: runtime, model: currentModel || undefined,
+				settingsManager, resourceLoader: emptyResources(), sessionManager,
+				tools: customTools.map(({ name }) => name), customTools,
+			});
+		};
+		if (rpc) {
+			startup.signal.throwIfAborted();
+			finishedStartup();
+			if (values.extension) console.error("Codey macOS sandbox: T3's injected extension is disabled.");
+			return await runSandboxRpc({
+				workspace, home, runtime, launchPath: values.session, ephemeral: values["no-session"], model, wireWrite,
+				createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel),
+			});
+		}
+		input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
+		const closed = new AbortController();
+		input.once("close", () => closed.abort());
+		function createSession(cwd, sandbox, current) {
 			const manager = SessionManager.inMemory(cwd);
 			const sessionManager = current ? SessionManager.inMemory(cwd, undefined, [
 				manager.getHeader(), ...structuredClone(current.sessionManager.getBranch()),
 			]) : manager;
-			return createAgentSession({
-				cwd, agentDir: host.agentDir, modelRuntime: runtime, model: model || undefined,
-				settingsManager: settings, resourceLoader: emptyResources(), sessionManager,
-				tools: customTools.map(({ name }) => name), customTools,
-			});
+			return newSession(cwd, sandbox, sessionManager, model, [
+				httpsReadTool(terminalApproval(input, cwd, closed.signal), projectDomains(home, cwd).has),
+			]);
 		}
 		const { session } = await createSession(workspace, initial);
 		const state = { workspace, sandbox: initial, session };
@@ -165,6 +212,7 @@ async function terminal() {
 		// The SDK's Agent can expose a placeholder even when model selection returned nothing.
 		await readCommands(state, home, runtime, model, input, createSession);
 	} finally {
+		finishedStartup();
 		input?.close();
 		try {
 			await runtime?.settleCredentialWrites();
@@ -316,7 +364,7 @@ async function readCommands(state, home, runtime, model, input, createSession) {
 }
 
 try {
-	await terminal();
+	await launch();
 } catch (error) {
 	console.error(`Codey macOS sandbox: ${display(error.message)}`);
 	process.exitCode = 1;
