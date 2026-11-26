@@ -1,0 +1,29 @@
+; Extra rules for the fixed Git management commands, never for model tools.
+(deny process-exec (subpath "/bin") (subpath "/usr/bin") (literal (param "NODE")))
+(allow process-exec (literal (param "GIT")))
+(allow file-read-metadata (path-ancestors (param "GIT")) (path-ancestors (param "COMMON")))
+(allow file-read* file-map-executable (literal (param "GIT")) (subpath (param "GIT_LIB")))
+(define common (param "COMMON"))
+(allow file-read-metadata (literal common))
+(allow file-read*
+  (literal (string-append common "/HEAD"))
+  (literal (string-append common "/config"))
+  (literal (string-append common "/packed-refs"))
+  (literal (string-append common "/shallow"))
+  (subpath (string-append common "/refs"))
+  (subpath (string-append common "/objects"))
+  (subpath (string-append common "/info"))
+  (subpath (string-append common "/worktrees")))
+(deny file-read-data
+  (literal (string-append common "/objects/info/alternates"))
+  (literal (string-append common "/objects/info/http-alternates")))
+(allow file-read* file-write* (literal (string-append (param "WORKSPACE") "/.git")))
+; These destinations are supplied only for the explicitly requested mutation.
+(allow file-write*
+  (subpath (param "REGISTRATION_WRITE"))
+  (subpath (param "REF_WRITE"))
+  (subpath (param "REFLOG_WRITE")))
+(allow file-read-metadata
+  (path-ancestors (param "REGISTRATION_WRITE"))
+  (path-ancestors (param "REF_WRITE"))
+  (path-ancestors (param "REFLOG_WRITE")))

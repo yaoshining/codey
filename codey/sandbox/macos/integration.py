@@ -180,7 +180,7 @@ def main():
                     f"if /usr/bin/touch {quote(index.with_name('sandbox-denied-probe'))} 2>/dev/null; then exit 4; fi; "
                     f"if /usr/bin/curl --silent --noproxy '*' --max-time 2 {probe} >/dev/null; then exit 4; fi; "
                     "[[ -z $OPENAI_API_KEY && -z $HTTPS_PROXY && -z $SSH_AUTH_SOCK ]] && printf 'BOUNDARY_''OK'", "BOUNDARY_OK")
-            for unavailable in ["/worktree", "/reload", "@tracked"]:
+            for unavailable in ["/reload", "@tracked"]:
                 command(unavailable, "unavailable in the macOS sandbox.")
             command("Use the fixture tool.", "FAKE_MODEL_FINISHED")
             terminal.send("/quit\r")
