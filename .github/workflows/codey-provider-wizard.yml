@@ -1,9 +1,9 @@
-name: Verify Codey local MCP bridge
+name: Verify Codey provider wizard
 
 on:
   push:
-    branches: [verify/codey-mcp-node-bridge]
-    paths: [.github/workflows/codey-mcp-node-bridge.yml]
+    branches: [verify/codey-provider-wizard]
+    paths: [.github/workflows/codey-provider-wizard.yml]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: c228a480cd37269a7f93f12ce472484209fa34fd
+          ref: 2bddac50397e4e4aa8ddfd238a21297c8d4d4358
           persist-credentials: false
       - name: Select official Node 24
         if: ${{ !matrix.brew }}
@@ -57,8 +57,8 @@ jobs:
           node codey/hydrate-model-data.mjs
           python3 -m venv "$RUNNER_TEMP/codey-test"
           "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
-      - name: Run ordinary Codey against a synthetic TLS MCP service
+      - name: Run the provider wizard against loopback model fixtures
         shell: bash
         run: |
-          node --test codey/test/mcp-ca.test.mjs codey/test/mcp-oauth.test.mjs
-          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge.integration.py ./codey/bin/codey
+          node --test codey/test/macos-host-model.test.mjs codey/test/mcp-ca.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider.integration.py ./codey/bin/codey
