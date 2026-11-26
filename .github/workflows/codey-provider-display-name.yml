@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: a2620b7f68486d03d4d0f1cc455993572294ce53
+          ref: 9c2a471ad7e49efa49994655903618ca06832081
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -29,6 +29,7 @@ jobs:
           "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
       - name: Run real terminal tests and endpoint checks
         run: |
-          node --test codey/test/provider-endpoint.test.mjs
+          node --import ./packages/coding-agent/src/experimental/source-resolver.ts --test codey/test/provider-endpoint.test.mjs codey/test/provider-catalog.test.mjs
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider.integration.py ./codey/bin/codey
           "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider-lan.integration.py ./codey/bin/codey
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider-catalog.integration.py ./codey/bin/codey
