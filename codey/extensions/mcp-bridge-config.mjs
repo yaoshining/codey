@@ -65,14 +65,15 @@ export function bridgeTokenVariable(value) {
 	return value;
 }
 
-export function bridgeStore(cwd, { optional = false } = {}) {
+export function bridgeStore(cwd, { optional = false, direct = false } = {}) {
 	const codey = join(realpathSync(homedir()), ".codey");
 	const agent = join(codey, "agent");
-	const folder = join(agent, "mcp-bridges");
+	const folder = join(agent, direct ? "mcp-direct" : "mcp-bridges");
+	const label = direct ? "Direct HTTPS MCP" : "MCP bridge";
 	const rel = relative(realpathSync(cwd), agent);
 	if (getAgentDir() !== agent || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`))) {
 		if (optional) return undefined;
-		throw new Error("MCP bridges require the default ~/.codey/agent outside the current project directory.");
+		throw new Error(`${label} settings require the default ~/.codey/agent outside the current project directory.`);
 	}
 	function directory(create) {
 		for (const path of [codey, agent, folder]) {
@@ -81,7 +82,7 @@ export function bridgeStore(cwd, { optional = false } = {}) {
 			}
 			const stat = lstatSync(path, { throwIfNoEntry: false });
 			if (!stat) return false;
-			if (!stat.isDirectory() || !owned(stat)) throw new Error("MCP bridge settings require user-owned directories protected from other writers.");
+			if (!stat.isDirectory() || !owned(stat)) throw new Error(`${label} settings require user-owned directories protected from other writers.`);
 		}
 		return true;
 	}
@@ -103,7 +104,7 @@ export function bridgeStore(cwd, { optional = false } = {}) {
 					const pem = value.pem === undefined || value.pem === "" ? "" : validateCertificate(value.pem).pem;
 					entries.push({ name, url, pem, tokenVariable: bridgeTokenVariable(value.tokenVariable ?? ""), source });
 				} catch {
-					errors.push(`Could not read saved MCP bridge "${id}". Check its configuration or remove it with /mcp bridge remove.`);
+					errors.push(`Could not read saved ${label} "${id}". Check its configuration or remove it with /mcp ${direct ? "direct" : "bridge"} remove.`);
 				}
 			}
 			return { entries, errors };
@@ -114,7 +115,7 @@ export function bridgeStore(cwd, { optional = false } = {}) {
 			const release = lockSync(folder, { lockfilePath: join(folder, ".config.lock") });
 			try {
 				if (savedNames().some((saved) => bridgeNamespace(saved) === bridgeNamespace(name))) {
-					throw new Error("An MCP bridge already uses that name.");
+					throw new Error(`A saved ${label} entry already uses that name.`);
 				}
 				const temp = mkdtempSync(join(folder, ".new-"));
 				try {
@@ -129,7 +130,7 @@ export function bridgeStore(cwd, { optional = false } = {}) {
 			}
 		},
 		remove(name) {
-			if (!directory(false)) throw new Error("There are no saved MCP bridges.");
+			if (!directory(false)) throw new Error(`There are no saved ${label} entries.`);
 			unlinkSync(join(folder, `${bridgeName(name).toLowerCase()}.json`));
 		},
 	};

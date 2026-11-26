@@ -8,7 +8,8 @@ import { Agent, fetch } from "undici";
 import { resolveHeadersOrThrow } from "../../packages/coding-agent/src/core/resolve-config-value.ts";
 import { createMcpExtension } from "../../packages/coding-agent/src/extensions/mcp/index.ts";
 import { createDefaultTransport } from "../../packages/coding-agent/src/extensions/mcp/runtime.ts";
-import { createBridgeTransport, loadWithBridges, withBridgeCommands } from "./mcp-bridge.mjs";
+import { createBridgeTransport, withBridgeCommands } from "./mcp-bridge.mjs";
+import { createDirectTransport, loadWithDirectMcp, withDirectCommands } from "./mcp-direct.mjs";
 
 function safelyOwned(stat) {
 	return (process.getuid === undefined || stat.uid === process.getuid()) && !(stat.mode & 0o022);
@@ -95,9 +96,11 @@ function tlsError(error, url, hasCa) {
 	return error;
 }
 
-export const codeyMcp = withBridgeCommands(createMcpExtension({
-	loadConfig: loadWithBridges,
+export const codeyMcp = withDirectCommands(withBridgeCommands(createMcpExtension({
+	loadConfig: loadWithDirectMcp,
 	createTransport(entry, cwd, authProvider) {
+		const direct = createDirectTransport(entry);
+		if (direct) return direct;
 		const bridge = createBridgeTransport(entry);
 		if (bridge) return bridge;
 		const { config, name } = entry;
@@ -128,4 +131,4 @@ export const codeyMcp = withBridgeCommands(createMcpExtension({
 		}
 		return transport;
 	},
-}));
+})));
