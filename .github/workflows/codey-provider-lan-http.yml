@@ -1,0 +1,41 @@
+name: Verify Codey LAN HTTP providers
+
+on:
+  push:
+    branches: [verify/codey-provider-lan-http]
+    paths: [.github/workflows/codey-provider-lan-http.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  provider:
+    runs-on: xcode-27
+    timeout-minutes: 12
+    steps:
+      - name: Check out fixed Codey candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 72cb134c7caa318b35301fcd69ff7a18dfccfd39
+          persist-credentials: false
+      - name: Select Homebrew Node 26
+        run: |
+          brew install node
+          prefix="$(brew --prefix node)"
+          "$prefix/bin/node" -e 'process.exit(process.versions.node.startsWith("26.") ? 0 : 1)'
+          printf '%s\n' "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Prepare synthetic test dependencies
+        run: |
+          sw_vers
+          uname -m
+          git rev-parse HEAD
+          node -p 'JSON.stringify({node: process.versions.node, openssl: process.versions.openssl})'
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+      - name: Test real provider terminal and Seatbelt host with local fixtures
+        run: |
+          node --test codey/test/provider-endpoint.test.mjs codey/test/macos-host-model.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider-lan.integration.py ./codey/bin/codey
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider.integration.py ./codey/bin/codey
