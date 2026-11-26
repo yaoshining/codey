@@ -5,6 +5,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -54,13 +55,17 @@ def main():
         agent.mkdir(parents=True)
         credentials = home / "host-only-marker"
         credentials.write_text("synthetic host marker")
+        host_openssl_config = home / "openssl.cnf"
+        host_openssl_config.write_text("# Synthetic host config\n")
         raw_config = {"providers": {"fixture": {"api": "openai-completions", "apiKey": "fixture",
                     "baseUrl": f"http://127.0.0.1:{server.server_port}/v1",
                     "models": [{"id": "fixture"}]}}}
         (agent / "models.json").write_text(json.dumps(raw_config))
         env = {"PATH": os.environ["PATH"], "HOME": str(home), "TERM": "xterm-256color",
                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
-               "OPENAI_API_KEY": "credential-canary", "HTTPS_PROXY": "", "SSH_AUTH_SOCK": "agent-canary"}
+               "OPENAI_API_KEY": "credential-canary", "HTTPS_PROXY": "", "SSH_AUTH_SOCK": "agent-canary",
+               "OPENSSL_CONF": str(host_openssl_config)}
+        node_path = Path(shutil.which("node", path=env["PATH"])).resolve(strict=True)
 
         def git(*args, cwd=source):
             return subprocess.check_output(["/usr/bin/git", *args], cwd=cwd, env=env, text=True).strip()
@@ -83,6 +88,7 @@ def main():
         outside = root / "outside-write"
         baseline_commands = [
             f"/bin/cat {quote(credentials)} >/dev/null", "/bin/cat .env >/dev/null",
+            f"/bin/cat {quote(host_openssl_config)} >/dev/null",
             f"/bin/cat {quote(index)} >/dev/null", f"/usr/bin/touch {quote(outside)}",
             f"/usr/bin/curl --silent --noproxy '*' --max-time 2 {probe} >/dev/null",
         ]
@@ -103,8 +109,11 @@ def main():
                 terminal.expect_exact("codey-sandbox> ")
 
             command("![[ $(/bin/cat tracked) == uncommitted ]] && printf 'typed-''output' > manual-output && printf 'MANUAL_''OK'", "MANUAL_OK")
+            crypto = "process.env.OPENSSL_CONF === '/dev/null' && require('node:crypto').createHash('sha256').update('fixture').digest().length === 32"
+            command(f"!{quote(node_path)} -e {quote(f'if (!({crypto})) process.exit(1)')} && printf 'OPENSSL_''OK'", "OPENSSL_OK")
             command("!!printf 'CONTEXT_''EXCLUDED'", "CONTEXT_EXCLUDED")
             command(f"!if /bin/cat {quote(credentials)} >/dev/null 2>&1; then exit 4; fi; "
+                    f"if /bin/cat {quote(host_openssl_config)} >/dev/null 2>&1; then exit 4; fi; "
                     f"if /usr/bin/touch {quote(outside)} 2>/dev/null; then exit 4; fi; "
                     "if /bin/cat .env >/dev/null 2>&1; then exit 4; fi; "
                     "if printf bad >> .env; then exit 4; fi; "
@@ -132,6 +141,7 @@ def main():
         assert "CONTEXT_EXCLUDED" not in json.dumps(FakeModel.requests)
         assert "MANUAL_OK" in json.dumps(FakeModel.requests)
         print("PASS: the public terminal fenced manual commands and model writes; fake model and linked metadata verified.", flush=True)
+        print("PASS: a worker child Node used the empty OpenSSL config and initialized SHA-256.", flush=True)
 
         (agent / "auth.json").write_text(json.dumps({"fixture": {"type": "api_key", "key": "!printf should-not-run"}}))
         with pexpect.spawn(str(binary), args, cwd=linked, env=env, encoding="utf-8", timeout=30) as terminal:
