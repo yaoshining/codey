@@ -22,8 +22,12 @@
 (allow file-write*
   (subpath (param "REGISTRATION_WRITE"))
   (subpath (param "REF_WRITE"))
-  (subpath (param "REFLOG_WRITE")))
+  (subpath (param "REFLOG_WRITE"))
+  ; Apple Git serializes ref creation against packed refs even for a new loose branch.
+  (literal (param "PACKED_LOCK")))
 (allow file-read-metadata
   (path-ancestors (param "REGISTRATION_WRITE"))
   (path-ancestors (param "REF_WRITE"))
-  (path-ancestors (param "REFLOG_WRITE")))
+  (path-ancestors (param "REFLOG_WRITE"))
+  (subpath (param "REFLOG_WRITE"))
+  (literal (param "PACKED_LOCK")))

@@ -54,6 +54,7 @@ export function sandboxWorktrees(root, home) {
 			REGISTRATION_WRITE: mutation === "create" ? join(common, "worktrees") : mutation?.gitDir ?? disabled,
 			REF_WRITE: mutation === "create" ? join(common, "refs/heads/codey") : disabled,
 			REFLOG_WRITE: mutation === "create" ? join(common, "logs/refs/heads/codey") : disabled,
+			PACKED_LOCK: mutation === "create" ? join(common, "packed-refs.lock") : disabled,
 		};
 		const result = spawnSync("/usr/bin/sandbox-exec", ["-f", profile,
 				...Object.entries(params).flatMap(([key, value]) => ["-D", `${key}=${value}`]),
@@ -79,7 +80,7 @@ export function sandboxWorktrees(root, home) {
 		directory(join(common, "worktrees"));
 		if (!directory(join(common, "objects")) || ["alternates", "http-alternates"].some((name) =>
 			lstatSync(join(common, "objects", "info", name), { throwIfNoEntry: false })) ||
-			lstatSync(join(common, "config.worktree"), { throwIfNoEntry: false })) {
+			["config.worktree", "commondir"].some((name) => lstatSync(join(common, name), { throwIfNoEntry: false }))) {
 			throw new Error("Unsupported worktree configuration or alternate Git object database.");
 		}
 		const fields = run(scratch, ["config", "--no-includes", "--null", "--file", join(common, "config"), "--list"]).split("\0").filter(Boolean);

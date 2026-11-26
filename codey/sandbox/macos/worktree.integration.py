@@ -59,7 +59,7 @@ def main(binary):
                 send("/worktree")
                 tty.expect_exact(chooser)
                 send(str(option))
-                tty.expect_exact("• Working directory changed to: ")
+                assert tty.expect_exact(["• Working directory changed to: ", prompt]) == 0, tty.before
                 assert "\x1b[" in tty.before
                 path = Path(tty.readline().split("\x1b", 1)[0].strip())
                 tty.expect_exact(prompt)

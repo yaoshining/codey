@@ -218,6 +218,7 @@ async function readCommands(state, home, runtime, model, input, createSession) {
 	else console.error(noModel);
 	console.log("Shell and file tools are offline. HTTPS reads require approval or a project domain grant. Type /help or /quit.");
 	let active;
+	input.once("close", () => active?.abort());
 	input.on("SIGINT", () => {
 		if (active) {
 			active.abort();
@@ -274,7 +275,10 @@ async function readCommands(state, home, runtime, model, input, createSession) {
 				else if (/^\/review\s/.test(text)) console.log("Usage: /review (current changes only)");
 				else if (text === "/worktree") {
 					const request = await worktreeMenu(input, root, home, state.workspace, active.signal);
-					if (request) await switchWorkspace(request, active.signal);
+					if (request) {
+						try { await switchWorkspace(request, active.signal); }
+						catch (error) { throw new Error(`Could not switch to ${request.path}. ${error.message}`); }
+					}
 				}
 				else if (/^\/worktree\s/.test(text)) console.log("Usage: /worktree");
 				else if (text === "/login" || text.startsWith("/login ")) console.log(loginGuidance);
