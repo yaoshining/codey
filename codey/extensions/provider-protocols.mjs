@@ -91,7 +91,8 @@ export function providerFromProfile(profile) {
 	// the network: the guarded fetch replaces all authentication headers at dispatch.
 	const requestOptions = (options) => ({ ...options, apiKey: "codey-managed-credential", fetch });
 	return {
-		id: profile.id, name: displayName, baseUrl: profile.baseUrl,
+		// Pi uses Provider.name to resolve authentication commands. A Codey display alias must not shadow another ID.
+		id: profile.id, name: displayName.toLowerCase() === profile.id ? displayName : profile.id, baseUrl: profile.baseUrl,
 		auth: { apiKey: { name: source, check: async () => ({ type: "api_key", source }), resolve: async () => ({ auth: {}, source }) } },
 		getModels: () => models,
 		stream: (model, context, options) => streams.stream(model, context, requestOptions(options)),

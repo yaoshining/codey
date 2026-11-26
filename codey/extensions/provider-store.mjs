@@ -1,14 +1,20 @@
 // Persist endpoint, model IDs and optional key together in one private host file.
-import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { lockSync } from "proper-lockfile";
 import { authentication, protocols, validModelId } from "./provider-protocols.mjs";
 import { authorizedProviderEndpoint } from "./provider-endpoint.mjs";
 
 const validName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
+const validId = /^[a-z][a-z0-9_-]{0,39}$/;
 
-export function providerIdentity(displayName) {
-	if (typeof displayName !== "string" || !validName.test(displayName)) throw new Error("Use a provider name starting with an ASCII letter, with up to 40 letters, digits, hyphens or underscores.");
+function validateDisplayName(name) {
+	if (typeof name !== "string" || !validName.test(name)) throw new Error("Use a provider name starting with an ASCII letter, with up to 40 letters, digits, hyphens or underscores.");
+	return name;
+}
+
+export function providerIdentity(name) {
+	const displayName = validateDisplayName(name);
 	return { id: displayName.toLowerCase(), displayName };
 }
 
@@ -66,6 +72,34 @@ export function providerStore(home, workspace) {
 		return ids.some((configuredId) => configuredId.toLowerCase() === id);
 	}
 	const hasCaseAlias = (files, id) => files.some((file) => file !== `${id}.json` && profileId(file) === id);
+	const changed = "The provider already exists or changed in another session. Start the wizard again.";
+
+	function defaultProvider() {
+		const settings = read(join(agent, "settings.json"));
+		return settings ? parse(settings)?.defaultProvider : undefined;
+	}
+
+	function update(id, revision, change) {
+		if (typeof id !== "string" || !validId.test(id)) throw new Error("Use the canonical provider ID.");
+		if (!directory(revision === undefined)) throw new Error(changed);
+		const target = join(folder, `${id}.json`);
+		const release = lockSync(folder);
+		try {
+			if (reserved(id) || hasCaseAlias(readdirSync(folder), id) || read(target, true) !== revision) throw new Error(changed);
+			change(target);
+		} finally { release(); }
+	}
+
+	function write(target, profile, creating) {
+		const temp = mkdtempSync(join(folder, ".write-"));
+		try {
+			const staged = join(temp, "profile");
+			writeFileSync(staged, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+			if (creating) linkSync(staged, target);
+			else renameSync(staged, target);
+		} finally { rmSync(temp, { recursive: true, force: true }); }
+	}
+
 	return {
 		has(id) {
 			return directory() && readdirSync(folder).some((file) => profileId(file) === id);
@@ -90,9 +124,8 @@ export function providerStore(home, workspace) {
 					if (!protocols.has(raw.api) || !authentication.has(raw.auth) || !Array.isArray(raw.models) ||
 						!raw.models.length || raw.models.length > 500 || !raw.models.every(validModelId)) throw new Error("Invalid profile fields.");
 					const { baseUrl, lanHttp } = authorizedProviderEndpoint(raw);
-					const identity = providerIdentity(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
-					if (identity.id !== id) throw new Error("The display name does not match the provider ID.");
-					const profile = { ...identity, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
+					const displayName = validateDisplayName(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
+					const profile = { id, displayName, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
 					if (lanHttp) profile.lanHttpApprovedUrl = raw.lanHttpApprovedUrl;
 					if (raw.auth === "key") profile.key = providerKey(raw.key);
 					entries.push({ profile, revision });
@@ -103,23 +136,23 @@ export function providerStore(home, workspace) {
 			return { entries, errors };
 		},
 		reserved,
+		defaultProvider,
 		save(profile, revision) {
 			authorizedProviderEndpoint(profile);
-			directory(true);
-			const { id } = providerIdentity(profile.displayName);
-			if (profile.id !== id) throw new Error("The display name does not match the provider ID.");
-			const target = join(folder, `${id}.json`);
-			const release = lockSync(folder);
-			try {
-				if (reserved(id) || hasCaseAlias(readdirSync(folder), id) || read(target, true) !== revision) throw new Error("The provider already exists or changed in another session. Start the wizard again.");
-				const temp = mkdtempSync(join(folder, ".write-"));
-				try {
-					const staged = join(temp, "profile");
-					writeFileSync(staged, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-					if (revision === undefined) linkSync(staged, target);
-					else renameSync(staged, target);
-				} finally { rmSync(temp, { recursive: true, force: true }); }
-			} finally { release(); }
+			validateDisplayName(profile.displayName);
+			update(profile.id, revision, (target) => write(target, profile, revision === undefined));
+		},
+		renameDisplayName(id, revision, name) {
+			const displayName = validateDisplayName(name);
+			if (typeof revision !== "string") throw new Error(changed);
+			update(id, revision, (target) => write(target, { ...parse(revision), displayName }, false));
+		},
+		remove(id, revision) {
+			if (typeof revision !== "string") throw new Error(changed);
+			update(id, revision, (target) => {
+				if (defaultProvider() === id) throw new Error("Set a different default with /model before deleting this provider.");
+				unlinkSync(target);
+			});
 		},
 	};
 }
