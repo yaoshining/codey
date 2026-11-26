@@ -7,6 +7,8 @@
 (allow sysctl-read
   (sysctl-name-prefix "hw.")
   (sysctl-name "kern.argmax")
+  ; libuv's uname() reads the node name with the OS and hardware identifiers.
+  (sysctl-name "kern.hostname")
   (sysctl-name "kern.osrelease")
   (sysctl-name "kern.ostype")
   (sysctl-name "kern.osversion")
@@ -76,5 +78,5 @@
 ; These names stay protected even inside the selected workspace. Explicit
 ; character classes preserve the restriction on case-insensitive volumes.
 (deny file-read* file-write*
-  (regex #"/([.][gG][iI][tT]|[.][eE][nN][vV]([.][^/]*)?|[.][sS][sS][hH]|[.][aA][wW][sS]|[.][gG][nN][uU][pP][gG]|[.][cC][oO][dD][eE][yY]|[.][pP][iI]|[.][nN][eE][tT][rR][cC]|[.][nN][pP][mM][rR][cC]|[^/]+[.][pP][eE][mM]|[^/]+[.][kK][eE][yY]|[iI][dD]_[^/]+|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]([.][jJ][sS][oO][nN])?)(/|$)"))
+  (regex #"/([.][gG][iI][tT](-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS])?|[.][eE][nN][vV]([.][^/]*|[rR][cC])?|[.][sS][sS][hH]|[.][aA][wW][sS]|[.][gG][nN][uU][pP][gG]|[.][cC][oO][dD][eE][yY]|[.][pP][iI]|[.][kK][uU][bB][eE]|[.][dD][oO][cC][kK][eE][rR]|[.][nN][eE][tT][rR][cC]|[.][nN][pP][mM][rR][cC]|[^/]+[.]([pP][eE][mM]|[kK][eE][yY]|[pP]12)|[iI][dD]_[^/]+|[aA][uU][tT][hH][.][jJ][sS][oO][nN]|[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]([.][jJ][sS][oO][nN])?)(/|$)"))
 ; No network or general IPC rule is present.
