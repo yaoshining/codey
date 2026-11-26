@@ -63,6 +63,23 @@ All Pi options remain available. Run `codey --help` for usage. `codey --version`
 
 To uninstall, remove the `~/.local/bin/codey` and `~/.local/bin/codey-t3` symlinks and the Codey checkout directory, then remove the `# Codey CLI path` line and following export from the shell startup files. Pi's settings and any separately installed `pi` are unaffected.
 
+## Trust a CA for one MCP endpoint
+
+For a server configured in the default global `~/.codey/agent/mcp.json`, obtain its CA certificate or self-signed server certificate from the service administrator. Verify its SHA-256 fingerprint through a trusted channel. Place the public PEM in `~/.codey/agent/mcp-cas/` and add a `~/.codey/agent/mcp-ca.json` entry with the same server name and exact HTTPS endpoint:
+
+```json
+{
+  "Pomodoist": {
+    "url": "https://192.0.2.10:8443/mcp",
+    "caFile": "pomodoist.pem"
+  }
+}
+```
+
+Replace the example URL and filename with your values. The files must be user-owned regular files and the directories must be user-owned, with no group or public write access. Keep the CA file and configuration in the host directory. Certificate chains and identities are checked. For an IP URL the certificate must contain that IP in its IP SAN, or you can use a DNS hostname covered by its SAN. Restart ordinary `codey` and check `/mcp`. Remove the sidecar entry and restart to restore the default trust store for that server.
+
+This CA applies to the configured server and exact endpoint in Codey sessions. The scoped connection rejects redirects and connects directly. Other MCP servers and separate OAuth endpoints use their usual trust. The standalone `codey mcp` commands and browser sign-in use their existing trust mechanisms. MCP remains unavailable in the macOS sandbox.
+
 ## T3 Code v0.1.11
 
 In the T3 Code Pi provider settings for your Codey instance, set **Binary path** to the absolute path of the installed `codey-t3` entry, normally `$HOME/.local/bin/codey-t3` on the machine running the T3 server. Use your custom binary directory if you set `CODEY_BIN_DIR`. Refresh the provider after saving.
