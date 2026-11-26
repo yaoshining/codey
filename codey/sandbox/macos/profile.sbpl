@@ -27,6 +27,11 @@
   (literal "/dev/fd"))
 (allow file-read* file-map-executable
   (subpath "/System/Library")
+  ; macOS can locate the signed dyld shared cache on the OS Cryptex.
+  (subpath "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld")
+  (subpath "/private/preboot/Cryptexes/OS/System/Library/dyld")
+  (subpath "/System/Cryptexes/OS/System/Library/dyld")
+  (subpath (param "DYLD_CACHE"))
   (subpath "/usr/lib")
   (subpath "/usr/bin")
   (subpath "/bin")
@@ -34,6 +39,14 @@
   (literal (param "NODE"))
   (subpath (param "TOOLCHAIN"))
   (subpath (param "TOOLCHAIN_LINKS")))
+(allow file-read*
+  (literal "/System/Volumes/Preboot/Cryptexes")
+  (literal "/System/Volumes/Preboot/Cryptexes/OS")
+  (literal "/private/preboot/Cryptexes")
+  (literal "/private/preboot/Cryptexes/OS")
+  (literal "/System/Cryptexes")
+  (literal "/System/Cryptexes/OS"))
+(allow file-read-metadata (path-ancestors (param "DYLD_CACHE")))
 (allow process-exec
   (subpath "/usr/bin")
   (subpath "/bin")

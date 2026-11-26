@@ -11,6 +11,18 @@ const profile = fileURLToPath(new URL("./profile.sbpl", import.meta.url));
 const resolver = pathToFileURL(join(install, "packages/coding-agent/src/experimental/source-resolver.ts")).href;
 const outputLimit = 1024 * 1024;
 
+function systemDyldCache() {
+	for (const prefix of ["/System/Cryptexes/OS", "/System/Volumes/Preboot/Cryptexes/OS", "/private/preboot/Cryptexes/OS"]) {
+		try {
+			const path = realpathSync(join(prefix, "System/Library/dyld"));
+			if (path.startsWith("/System/Volumes/Preboot/") || path.startsWith("/private/preboot/")) return path;
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+	}
+	return "/System/Library/dyld";
+}
+
 export function contains(root, path) {
 	const child = relative(root, path);
 	return child === "" || (!isAbsolute(child) && child !== ".." && !child.startsWith("../"));
@@ -60,6 +72,7 @@ export async function openSeatbelt(workspace, hostHome) {
 		WORKSPACE: workspace, SCRATCH: scratch, INSTALL: install, NODE: node,
 		TOOLCHAIN: brew ? `${brew}/Cellar` : "/dev/null",
 		TOOLCHAIN_LINKS: brew ? `${brew}/opt` : "/dev/null",
+		DYLD_CACHE: systemDyldCache(),
 	};
 	const env = { HOME: join(scratch, "home"), TMPDIR: scratch, PATH: "/usr/bin:/bin", LANG: "C", TERM: "dumb" };
 	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, name, args, signal });
