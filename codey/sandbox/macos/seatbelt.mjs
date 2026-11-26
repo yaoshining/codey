@@ -1,13 +1,14 @@
 // Run bounded tools under the fixed macOS backend, using pipes and an allowlisted environment.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const install = realpathSync(fileURLToPath(new URL("../../..", import.meta.url)));
 const backend = "/usr/bin/sandbox-exec";
 const worker = fileURLToPath(new URL("./worker.mjs", import.meta.url));
 const profile = fileURLToPath(new URL("./profile.sbpl", import.meta.url));
+const reviewRules = fileURLToPath(new URL("./review.sbpl", import.meta.url));
 const resolver = pathToFileURL(join(install, "packages/coding-agent/src/experimental/source-resolver.ts")).href;
 const outputLimit = 1024 * 1024;
 
@@ -26,6 +27,17 @@ function systemDyldCache() {
 export function contains(root, path) {
 	const child = relative(root, path);
 	return child === "" || (!isAbsolute(child) && child !== ".." && !child.startsWith("../"));
+}
+
+function reviewGit() {
+	const path = realpathSync(execFileSync("/usr/bin/xcrun", ["--find", "git"], {
+		cwd: "/", env: { HOME: "/var/empty", PATH: "/usr/bin:/bin" }, encoding: "utf8",
+		timeout: 5000, maxBuffer: 4096, stdio: ["ignore", "pipe", "ignore"],
+	}).trim());
+	if (!/^\/(?:Applications\/[^/]+\.app\/Contents\/Developer\/(?:Toolchains\/[^/]+\/)?|Library\/Developer\/CommandLineTools\/)usr\/bin\/git$/.test(path)) {
+		throw new Error("Review needs Git from Xcode or the Apple Command Line Tools.");
+	}
+	return path;
 }
 
 export async function openSeatbelt(workspace, hostHome) {
@@ -82,6 +94,30 @@ export async function openSeatbelt(workspace, hostHome) {
 		OPENSSL_CONF: "/dev/null",
 	};
 	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, name, args, signal });
+	let reviewPolicy;
+	async function review(signal) {
+		if (!reviewPolicy) {
+			// Resolve the system tool without Git or project discovery on the host.
+			const git = reviewGit();
+			const path = join(hostDir, "review.sbpl");
+			writeFileSync(path, `${readFileSync(profile, "utf8")}\n${readFileSync(reviewRules, "utf8")}`, { mode: 0o600, flag: "wx" });
+			reviewPolicy = {
+				path, git, params: { ...params, REVIEW_GIT: git, REVIEW_GIT_LIB: join(dirname(dirname(git)), "lib"), REVIEW_GIT_DIR: gitFile },
+			};
+		}
+		const reviewScratch = mkdtempSync("/private/tmp/codey-sandbox-review-");
+		try {
+			const home = join(reviewScratch, "home");
+			mkdirSync(home, { mode: 0o700 });
+			return await runSeatbelt({
+				workspace, node, params: { ...reviewPolicy.params, SCRATCH: reviewScratch },
+				env: { ...env, HOME: home, TMPDIR: reviewScratch },
+				policy: reviewPolicy.path, name: "review", args: { git: reviewPolicy.git }, signal,
+			});
+		} finally {
+			rmSync(reviewScratch, { recursive: true, force: true });
+		}
+	}
 	try {
 		mkdirSync(env.HOME, { mode: 0o700 });
 		const hostProbe = join(hostDir, "denied-probe");
@@ -89,19 +125,19 @@ export async function openSeatbelt(workspace, hostHome) {
 		if (readFileSync(hostProbe, "utf8") !== "sandbox probe") throw new Error("Host preflight file is unreadable.");
 		const result = await execute("ready", { hostProbe });
 		if (!result.ready) throw new Error("Seatbelt worker did not complete its startup check.");
-		return { execute, close, hostDir };
+		return { execute, review, close, hostDir };
 	} catch (error) {
 		close();
 		throw new Error(`Seatbelt startup failed: ${error.message}`);
 	}
 }
 
-function runSeatbelt({ workspace, node, params, env, name, args, signal }) {
+function runSeatbelt({ workspace, node, params, env, policy = profile, name, args, signal }) {
 	const input = JSON.stringify({ name, args });
 	if (Buffer.byteLength(input) > outputLimit) throw new Error("Tool input exceeds 1 MiB.");
 	if (signal?.aborted) throw new Error("Operation cancelled.");
 	const child = spawn(backend, [
-		"-f", profile, ...Object.entries(params).flatMap(([key, value]) => ["-D", `${key}=${value}`]),
+		"-f", policy, ...Object.entries(params).flatMap(([key, value]) => ["-D", `${key}=${value}`]),
 		node, "--import", resolver, worker,
 	], { cwd: workspace, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
 	return new Promise((resolveResult, reject) => {
@@ -112,7 +148,7 @@ function runSeatbelt({ workspace, node, params, env, name, args, signal }) {
 			failure ??= new Error(message);
 			try { process.kill(-child.pid, "SIGKILL"); } catch { /* Process group already exited. */ }
 		};
-		const seconds = name === "ready" ? 15 : name === "bash" && Number.isFinite(args.timeout)
+		const seconds = name === "ready" ? 15 : name === "review" ? 20 : name === "bash" && Number.isFinite(args.timeout)
 			? Math.min(120, Math.max(1, args.timeout))
 			: 120;
 		const timeout = setTimeout(() => terminate("Seatbelt worker timed out."), seconds * 1000);

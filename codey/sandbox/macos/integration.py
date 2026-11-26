@@ -10,7 +10,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
-from threading import Thread
+from threading import Event, Thread
 
 import pexpect
 
@@ -18,6 +18,8 @@ import pexpect
 class FakeModel(BaseHTTPRequestHandler):
     requests = []
     approved_reads = []
+    review_mode = "success"
+    review_gate = Event()
 
     def do_GET(self):
         if self.path in ("/approved", "/denied", "/timeout", "/granted", "/revoked", "/isolated", "/subdomain"):
@@ -37,6 +39,35 @@ class FakeModel(BaseHTTPRequestHandler):
         latest_user = max(i for i, m in enumerate(body["messages"]) if m["role"] == "user")
         latest_tools = [m for m in body["messages"][latest_user:] if m["role"] == "tool"]
         prompt = str(body["messages"][latest_user]["content"])
+        if "Review the supplied Git patches" in str(body["messages"][0]["content"]):
+            assert not body.get("tools") and latest_user == 1
+            if self.review_mode == "error":
+                self.send_error(400)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+
+            def chunk(delta, finish=None):
+                payload = {"id": "review", "object": "chat.completion.chunk", "created": 1, "model": "fixture",
+                           "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+                self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                self.wfile.flush()
+
+            try:
+                chunk({"role": "assistant", "content": "P2 STREAMED_REVIEW_FIRST"})
+                assert self.review_gate.wait(18)
+                chunk({"content": " STREAMED_REVIEW_LAST", "tool_calls": [
+                    {"index": 0, "type": "function", "id": "forbidden_write",
+                     "function": {"name": "write", "arguments": '{"path":"review-must-not-write","content":"fixture"}'}},
+                    {"index": 1, "type": "function", "id": "forbidden_network",
+                     "function": {"name": "https_read", "arguments": '{"url":"https://codey-approval.example/approved"}'}},
+                ]})
+                chunk({}, "tool_calls")
+                self.wfile.write(b"data: [DONE]\n\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         paths = ["approved", "denied", "timeout", "granted", "revoked", "isolated", "subdomain"]
         read_path = next((path for path in paths if f"request {path} read" in prompt), None)
         if read_path and not latest_tools:
@@ -149,7 +180,7 @@ def main():
                     f"if /usr/bin/touch {quote(index.with_name('sandbox-denied-probe'))} 2>/dev/null; then exit 4; fi; "
                     f"if /usr/bin/curl --silent --noproxy '*' --max-time 2 {probe} >/dev/null; then exit 4; fi; "
                     "[[ -z $OPENAI_API_KEY && -z $HTTPS_PROXY && -z $SSH_AUTH_SOCK ]] && printf 'BOUNDARY_''OK'", "BOUNDARY_OK")
-            for unavailable in ["/review", "/worktree", "/reload", "@tracked"]:
+            for unavailable in ["/worktree", "/reload", "@tracked"]:
                 command(unavailable, "unavailable in the macOS sandbox.")
             command("Use the fixture tool.", "FAKE_MODEL_FINISHED")
             terminal.send("/quit\r")
@@ -292,6 +323,108 @@ def main():
         assert FakeModel.approved_reads == ["/approved", "/granted"]
         print("PASS: fake model requested approval, only the approved call reached the controlled service, and the turn continued.", flush=True)
         print("PASS: exact domain applied to the canonical workspace, excluded subdomains and other workspaces, and revocation restored the prompt.", flush=True)
+
+        review_started = ">> Code review started: current changes <<"
+        review_finished = "<< Code review finished >>"
+        with pexpect.spawn(str(binary), args, cwd=linked, env=env, encoding="utf-8", timeout=40) as terminal:
+            terminal.expect_exact("codey-sandbox> ")
+            terminal.send("/review\r")
+            terminal.expect_exact("Linked worktrees are unavailable.")
+            terminal.expect_exact(review_finished)
+            terminal.expect_exact("codey-sandbox> ")
+            terminal.send("/quit\r")
+            terminal.expect(pexpect.EOF)
+
+        with pexpect.spawn(str(binary), args, cwd=source, env=env, encoding="utf-8", timeout=40) as terminal:
+            terminal.expect_exact("codey-sandbox> ")
+            initial_count = len(FakeModel.requests)
+
+            def start_review():
+                terminal.send("/review\r")
+                terminal.expect_exact(review_started)
+                assert "\x1b[" in terminal.before
+
+            def end_review():
+                terminal.expect_exact(review_finished)
+                assert "\x1b[" in terminal.before and "Network approval requested" not in terminal.before
+                terminal.expect_exact("codey-sandbox> ")
+
+            start_review()
+            terminal.expect_exact("No changes to review.")
+            end_review()
+            assert len(FakeModel.requests) == initial_count
+
+            (source / "tracked").write_text("fixture staged line\n")
+            git("add", "tracked")
+            (source / "tracked").write_text("fixture unstaged line\n")
+            (source / "new change").write_text("fixture untracked line\n")
+            (source / ".git/info/exclude").write_text(".env\nignore-this\n")
+            (source / "ignore-this").write_text("ignore-marker\n")
+            (source / ".env").write_text("not-in-model-context\n")
+            git("config", "diff.external", "/usr/bin/false")
+            git("config", "filter.fixture.clean", "/usr/bin/false")
+            (source / ".gitattributes").write_text("tracked filter=fixture\n")
+            old_files = {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()}
+            review_index = (source / ".git/index").read_bytes()
+            start_review()
+            terminal.expect_exact("P2 STREAMED_REVIEW_FIRST")
+            FakeModel.review_gate.set()
+            terminal.expect_exact("STREAMED_REVIEW_LAST")
+            end_review()
+            assert len(FakeModel.requests) == initial_count + 1
+            request = FakeModel.requests[-1]
+            review_input = json.dumps(request["messages"])
+            for marker in ("Staged changes", "Unstaged changes", "Untracked file", "fixture staged line",
+                           "fixture unstaged line", "fixture untracked line"):
+                assert marker in review_input, request
+            for marker in ("ignore-marker", "not-in-model-context", str(source), "credential-canary"):
+                assert marker not in review_input
+            assert not request.get("tools")
+            assert {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()} == old_files
+            assert (source / ".git/index").read_bytes() == review_index
+
+            git("add", "-f", ".env")
+            start_review()
+            terminal.expect_exact("protected or unsupported file path")
+            end_review()
+            git("rm", "--cached", "-q", ".env")
+            (source / "too-large").write_text("x" * 65537)
+            start_review()
+            terminal.expect_exact("exceeds the review size limit")
+            end_review()
+            (source / "too-large").unlink()
+            (source / "linked-secret").symlink_to(credentials)
+            start_review()
+            terminal.expect_exact("regular files without links")
+            end_review()
+            (source / "linked-secret").unlink()
+            assert len(FakeModel.requests) == initial_count + 1
+
+            FakeModel.review_mode = "error"
+            start_review()
+            terminal.expect_exact("The model request failed.")
+            end_review()
+            FakeModel.review_mode = "success"
+            FakeModel.review_gate.clear()
+            start_review()
+            terminal.expect_exact("P2 STREAMED_REVIEW_FIRST")
+            terminal.sendcontrol("c")
+            terminal.expect_exact("Code review canceled.")
+            end_review()
+            FakeModel.review_gate.set()
+            terminal.send("Continue with the normal fixture tool.\r")
+            terminal.expect_exact("FAKE_MODEL_FINISHED")
+            terminal.expect_exact("codey-sandbox> ")
+            terminal.send("/quit\r")
+            terminal.expect(pexpect.EOF)
+            terminal.close()
+            assert terminal.exitstatus == 0
+        assert not (source / "review-must-not-write").exists()
+        assert not (source / ".gitignore").exists()
+        assert FakeModel.approved_reads == ["/approved", "/granted"]
+        assert "STREAMED_REVIEW_FIRST" not in json.dumps(FakeModel.requests[-1]["messages"])
+        assert "fixture staged line" not in json.dumps(FakeModel.requests[-1]["messages"])
+        print("PASS: real sandbox /review streams inline with brand markers, refuses unsafe input, sends no tools, and recovers from error and cancellation.", flush=True)
         tls_server.shutdown()
         server.shutdown()
 

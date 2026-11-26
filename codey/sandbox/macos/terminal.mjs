@@ -10,6 +10,8 @@ import { findInitialModel } from "../../../packages/coding-agent/src/core/model-
 import { createAgentSession } from "../../../packages/coding-agent/src/core/sdk.ts";
 import { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
+import { styleReviewMarker } from "../../branding.mjs";
+import { reviewSystemPrompt } from "../../extensions/review.mjs";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
 import { projectDomains } from "./project-domains.mjs";
@@ -24,7 +26,7 @@ const help = `Usage: codey --sandbox workspace-write [--workspace <directory>] [
 Open an interactive macOS session using the current files. Shell and file tools
 run offline in Seatbelt. A model can request one HTTPS read for your approval.
 Model requests run on the host.
-Supported terminal commands: /help, /quit, !command, !!command.`;
+Supported terminal commands: /review, /help, /quit, !command, !!command.`;
 const loginGuidance = "Exit with /quit, run regular codey and use /login there, then reopen this sandbox.";
 const noModel = `No models available. ${loginGuidance}`;
 
@@ -151,7 +153,7 @@ async function terminal() {
 		});
 		session = result.session;
 		// The SDK's Agent can expose a placeholder even when model selection returned nothing.
-		await readCommands(workspace, session, sandbox, model, input);
+		await readCommands(workspace, session, sandbox, runtime, model, input);
 	} finally {
 		input?.close();
 		session?.dispose();
@@ -163,7 +165,44 @@ async function terminal() {
 	}
 }
 
-async function readCommands(workspace, session, sandbox, model, input) {
+async function reviewChanges(sandbox, runtime, model, signal) {
+	console.log(styleReviewMarker(">> Code review started: current changes <<"));
+	try {
+		const { patches } = await sandbox.review(signal);
+		if (!patches.length) return console.log("No changes to review.");
+		if (!model) throw new Error(noModel);
+		const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+		const response = runtime.stream(model, {
+			systemPrompt: reviewSystemPrompt,
+			messages: [{ role: "user", content: JSON.stringify(patches), timestamp: Date.now() }],
+			tools: [],
+		}, { maxTokens: 4096, cacheRetention: "none", signal: deadline });
+		let wroteText = false;
+		try {
+			for await (const event of response) {
+				deadline.throwIfAborted();
+				if (event.type !== "text_delta") continue;
+				const delta = display(event.delta);
+				if (!delta) continue;
+				process.stdout.write(delta);
+				wroteText = true;
+			}
+		} finally {
+			if (wroteText) process.stdout.write("\n");
+		}
+		deadline.throwIfAborted();
+		const result = await response.result();
+		if (result.stopReason === "error" || result.stopReason === "aborted") throw new Error("The model request failed.");
+		if (!wroteText) console.log("The model returned no review text.");
+		if (result.stopReason === "length") console.log("The model reached its output limit.");
+	} catch (error) {
+		console.log(signal.aborted ? "Code review canceled." : `Review could not finish: ${display(error.message)}`);
+	} finally {
+		console.log(styleReviewMarker("<< Code review finished >>"));
+	}
+}
+
+async function readCommands(workspace, session, sandbox, runtime, model, input) {
 	console.log(`Codey macOS sandbox (workspace-write): ${display(workspace)}`);
 	if (model) console.log(`Model: ${display(model.provider)}/${display(model.id)}`);
 	else console.error(noModel);
@@ -194,6 +233,8 @@ async function readCommands(workspace, session, sandbox, model, input) {
 			active = new AbortController();
 			try {
 				if (text === "/help") console.log(help);
+				else if (text === "/review") await reviewChanges(sandbox, runtime, model, active.signal);
+				else if (/^\/review\s/.test(text)) console.log("Usage: /review (current changes only)");
 				else if (text === "/login" || text.startsWith("/login ")) console.log(loginGuidance);
 				else if (text.startsWith("/") || text.startsWith("@")) console.log("This command or attachment is unavailable in the macOS sandbox.");
 				else if (text.startsWith("!")) {
