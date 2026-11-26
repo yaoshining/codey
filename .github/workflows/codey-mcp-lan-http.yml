@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 6a831cadc91e09ebaf965246b315ff0e8fc9a3e1
+          ref: 20d1989eac997dd07772f0e04d452e58d702bdee
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -23,7 +23,7 @@ jobs:
           uname -m
           node --version
           git rev-parse HEAD
-          test "$(git rev-parse HEAD)" = 6a831cadc91e09ebaf965246b315ff0e8fc9a3e1
+          test "$(git rev-parse HEAD)" = 20d1989eac997dd07772f0e04d452e58d702bdee
           npm ci --ignore-scripts --no-audit --no-fund
           node codey/hydrate-model-data.mjs
           python3 -m venv "$RUNNER_TEMP/codey-test"
