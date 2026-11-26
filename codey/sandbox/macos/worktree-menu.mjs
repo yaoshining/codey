@@ -36,7 +36,7 @@ export async function worktreeMenu(input, root, home, cwd, signal) {
 	const actions = entry.current ? [copy] : [carry, "Switch with an empty conversation", copy, remove];
 	const action = await pick(input, signal, `Worktree: ${entry.path}${entry.current ? "\nDelete worktree is unavailable in the current checkout." : ""}`, actions);
 	if (action === copy) {
-		const env = { PATH: "/usr/bin:/bin" };
+		const env = { PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" };
 		try {
 			execFileSync("/usr/bin/pbcopy", [], { input: entry.path, env, cwd: "/", timeout: 2500, stdio: ["pipe", "pipe", "pipe"] });
 			if (execFileSync("/usr/bin/pbpaste", [], { env, cwd: "/", encoding: "utf8", timeout: 2500 }) !== entry.path) throw new Error();

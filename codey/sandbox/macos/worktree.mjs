@@ -38,7 +38,7 @@ export function sandboxWorktrees(root, home) {
 	const common = join(root, ".git");
 	const codey = join(home, ".codey");
 	const pool = join(codey, "worktrees");
-	if (!safeText(root) || !safeText(pool) || !directory(common) || contains(root, pool) || contains(pool, root)) {
+	if (!safeText(root) || !safeText(pool) || !directory(root) || !directory(common) || contains(root, pool) || contains(pool, root)) {
 		throw new Error("Start worktree management from the root of the source checkout with its own .git directory.");
 	}
 	const git = appleGit();
@@ -64,7 +64,8 @@ export function sandboxWorktrees(root, home) {
 			], {
 				cwd: "/", env: { PATH: `${dirname(git)}:/usr/bin:/bin`, GIT_EXEC_PATH: dirname(git), HOME: scratch, TMPDIR: scratch, LANG: "C", GIT_CONFIG_NOSYSTEM: "1",
 					GIT_CONFIG_GLOBAL: "/dev/null", GIT_ATTR_NOSYSTEM: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0",
-					GIT_NO_REPLACE_OBJECTS: "1" },
+					GIT_NO_REPLACE_OBJECTS: "1", GIT_AUTHOR_NAME: "Codey sandbox", GIT_AUTHOR_EMAIL: "codey@example.invalid",
+					GIT_COMMITTER_NAME: "Codey sandbox", GIT_COMMITTER_EMAIL: "codey@example.invalid" },
 				encoding: "utf8", timeout: 15_000, maxBuffer: 256 * 1024, stdio: ["ignore", "pipe", "pipe"],
 			});
 		if (result.error || result.status !== 0 || result.stderr?.trim()) {
