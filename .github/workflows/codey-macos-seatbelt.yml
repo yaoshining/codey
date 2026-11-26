@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: aa2e3a3742159098874176126cd91cdf5b9463fc
+          ref: 29178ff06657baaf058c0c8b935bf31110afb051
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
