@@ -162,7 +162,7 @@ def run(binary):
         Gateway.seen.clear()
         print("PASS: legacy rename updated the live /model label, refused an ID change and a stale write, preserved the profile, and used HTTPS and LAN HTTP after restart.", flush=True)
 
-        with terminal() as tty:
+        with terminal("--provider", "litellm", "--model", "lan-model") as tty:
             start(tty)
             operation(tty, 4, "LiteLLM (ID: litellm)")
             tty.expect_exact("Select a different current model with /model")
@@ -181,13 +181,14 @@ def run(binary):
             assert read_default() == {"defaultProvider": "local-tls", "defaultModel": "tls-model"}
             quit(tty)
 
-        with terminal("--models", "local-tls/tls-model,litellm/lan-model") as tty:
+        with terminal("--provider", "local-tls", "--model", "tls-model",
+                      "--models", "local-tls/tls-model,litellm/lan-model") as tty:
             start(tty)
             operation(tty, 4, "LiteLLM (ID: litellm)")
             tty.expect_exact("Remove this provider's models from /scoped-models")
             quit(tty)
 
-        with terminal() as tty:
+        with terminal("--provider", "local-tls", "--model", "tls-model") as tty:
             start(tty)
             operation(tty, 4, "LiteLLM (ID: litellm)")
             tty.expect_exact("Delete LiteLLM (ID: litellm)?")
