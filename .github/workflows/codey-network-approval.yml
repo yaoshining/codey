@@ -1,9 +1,9 @@
-name: Verify Codey Seatbelt local models
+name: Verify Codey Seatbelt one-time HTTPS approval
 
 on:
   push:
-    branches: [verify/codey-macos-sandbox-models]
-    paths: [.github/workflows/codey-sandbox-models.yml]
+    branches: [verify/codey-macos-network-approval]
+    paths: [.github/workflows/codey-network-approval.yml]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 86ce0cd85537f835ddc2442d1fd40e96636cd79f
+          ref: 14a5f3fb29850bfc38b03839fd2a7799772a6cfa
           persist-credentials: false
       - name: Select official Node 24
         if: ${{ !matrix.brew }}
