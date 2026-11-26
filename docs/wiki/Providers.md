@@ -16,6 +16,10 @@
 
 用 **Edit provider or models** 修改端点、协议、认证或模型列表，用 **Replace API key** 换密钥。端点或协议变更时，填入新连接的密钥。保存前会显示修改范围，取消时不会写入。向导管理的配置和掩码录入的密钥保存在默认宿主目录 `~/.codey/agent/custom-providers/`，其中每个文件只供当前用户访问。`models.json` 和 `/login` 的标准凭据文件照旧。使用 `/provider` 管理这些连接的密钥。
 
+用 **Rename display name** 更改现有名称的大小写，例如把 `litellm` 显示为 `LiteLLM`。文件名、内部 ID、连接和历史关联继续使用原来的小写 ID。
+
+用 **Delete provider** 移除向导保存的连接、模型列表和随连接保存的密钥及 LAN HTTP 授权。确认菜单默认选中 **Cancel**。若该连接是当前模型或默认模型，请先在 `/model` 亲自切换，必要时设为新的默认模型。如果已将它限定在会话的模型范围内，先在 `/scoped-models` 移出这些模型。这个入口只管理 `/provider` 保存的连接，其他已打开的 Codey 实例重启后才会应用变更。
+
 如果你的网关是 LiteLLM，OpenAI 协议通常填 `https://gateway.example.org/v1`，Anthropic Messages 通常填 `https://gateway.example.org`。模型 ID 填网关给出的别名。自定义连接的浏览器 OAuth 暂未开放。macOS Seatbelt 会话重新启动时可从可信宿主目录读取已保存的连接，向导仍在普通 Codey 中使用。
 
 ### 局域网 LiteLLM 使用 HTTP

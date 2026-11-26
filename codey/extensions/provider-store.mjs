@@ -1,5 +1,5 @@
 // Persist endpoint, model IDs and optional key together in one private host file.
-import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { lockSync } from "proper-lockfile";
 import { authentication, protocols, validModelId } from "./provider-protocols.mjs";
@@ -66,6 +66,34 @@ export function providerStore(home, workspace) {
 		return ids.some((configuredId) => configuredId.toLowerCase() === id);
 	}
 	const hasCaseAlias = (files, id) => files.some((file) => file !== `${id}.json` && profileId(file) === id);
+	const changed = "The provider already exists or changed in another session. Start the wizard again.";
+
+	function defaultProvider() {
+		const settings = read(join(agent, "settings.json"));
+		return settings ? parse(settings)?.defaultProvider : undefined;
+	}
+
+	function update(id, revision, change) {
+		if (providerIdentity(id).id !== id) throw new Error("Use the canonical provider ID.");
+		if (!directory(revision === undefined)) throw new Error(changed);
+		const target = join(folder, `${id}.json`);
+		const release = lockSync(folder);
+		try {
+			if (reserved(id) || hasCaseAlias(readdirSync(folder), id) || read(target, true) !== revision) throw new Error(changed);
+			change(target);
+		} finally { release(); }
+	}
+
+	function write(target, profile, creating) {
+		const temp = mkdtempSync(join(folder, ".write-"));
+		try {
+			const staged = join(temp, "profile");
+			writeFileSync(staged, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+			if (creating) linkSync(staged, target);
+			else renameSync(staged, target);
+		} finally { rmSync(temp, { recursive: true, force: true }); }
+	}
+
 	return {
 		has(id) {
 			return directory() && readdirSync(folder).some((file) => profileId(file) === id);
@@ -103,23 +131,25 @@ export function providerStore(home, workspace) {
 			return { entries, errors };
 		},
 		reserved,
+		defaultProvider,
 		save(profile, revision) {
 			authorizedProviderEndpoint(profile);
-			directory(true);
 			const { id } = providerIdentity(profile.displayName);
 			if (profile.id !== id) throw new Error("The display name does not match the provider ID.");
-			const target = join(folder, `${id}.json`);
-			const release = lockSync(folder);
-			try {
-				if (reserved(id) || hasCaseAlias(readdirSync(folder), id) || read(target, true) !== revision) throw new Error("The provider already exists or changed in another session. Start the wizard again.");
-				const temp = mkdtempSync(join(folder, ".write-"));
-				try {
-					const staged = join(temp, "profile");
-					writeFileSync(staged, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-					if (revision === undefined) linkSync(staged, target);
-					else renameSync(staged, target);
-				} finally { rmSync(temp, { recursive: true, force: true }); }
-			} finally { release(); }
+			update(id, revision, (target) => write(target, profile, revision === undefined));
+		},
+		renameDisplayName(id, revision, name) {
+			const { id: normalized, displayName } = providerIdentity(name);
+			if (normalized !== id) throw new Error(`Change capitalization only. The provider ID remains ${id}.`);
+			if (typeof revision !== "string") throw new Error(changed);
+			update(id, revision, (target) => write(target, { ...parse(revision), displayName }, false));
+		},
+		remove(id, revision) {
+			if (typeof revision !== "string") throw new Error(changed);
+			update(id, revision, (target) => {
+				if (defaultProvider() === id) throw new Error("Set a different default with /model before deleting this provider.");
+				unlinkSync(target);
+			});
 		},
 	};
 }

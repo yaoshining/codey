@@ -179,12 +179,18 @@ async function draft(ui, identity, previous, action) {
 export default function customProviders(pi) {
 	const builtins = new Set(builtinProviders().map(({ id }) => id.toLowerCase()));
 	builtins.add("llama.cpp");
+	const registered = new Map();
+	function register(profile) {
+		const provider = providerFromProfile(profile);
+		pi.registerProvider(provider);
+		registered.set(profile.id, provider);
+	}
 	const errors = [];
 	try {
 		const saved = hostStore(process.cwd())?.list();
 		for (const { profile } of saved?.entries ?? []) {
 			if (builtins.has(profile.id)) continue;
-			pi.registerProvider(providerFromProfile(profile));
+			register(profile);
 		}
 		errors.push(...(saved?.errors ?? []));
 	} catch { errors.push("Could not read the private Codey provider directory. Check its ownership and permissions."); }
@@ -192,7 +198,7 @@ export default function customProviders(pi) {
 		if (errors.length) ctx.ui.notify(errors.join("\n"), "warning");
 	});
 	pi.registerCommand("provider", {
-		description: "Add or edit a custom model provider",
+		description: "Manage custom model providers",
 		async handler(args, ctx) {
 			if (args.trim() || ctx.mode !== "tui" || !ctx.hasUI || !ctx.isIdle()) {
 				ctx.ui.notify("Use /provider in an idle ordinary Codey terminal.", "warning");
@@ -203,14 +209,14 @@ export default function customProviders(pi) {
 				const store = hostStore(ctx.cwd);
 				if (!store) throw new Error("The wizard needs the default ~/.codey/agent outside the workspace.");
 				const existing = store.list().entries.filter(({ profile }) => !builtins.has(profile.id));
-				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key"] : [])];
+				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key", "Rename display name", "Delete provider"] : [])];
 				const action = await ui.select("Custom providers", actions);
 				if (action === undefined) return;
 				const adding = action === "Add provider";
 				const name = adding ? await ui.input("New provider name") : await ui.select("Choose saved provider", existing.map(({ profile }) => providerLabel(profile)));
 				if (name === undefined) return;
 				const entry = adding ? undefined : existing.find(({ profile }) => providerLabel(profile) === name);
-				const identity = providerIdentity(entry?.profile.displayName ?? name.trim());
+				const identity = entry?.profile ?? providerIdentity(name.trim());
 				const { id } = identity;
 				const checkConflict = () => {
 					const registry = ctx.modelRegistry;
@@ -223,7 +229,11 @@ export default function customProviders(pi) {
 					}
 				};
 				checkConflict();
-				const profile = await draft(ui, identity, entry?.profile, action);
+				if (action === "Rename display name" || action === "Delete provider") {
+					await manageProvider(action, entry, store, ctx);
+					return;
+				}
+				const profile = await draft(ui, { id, displayName: identity.displayName }, entry?.profile, action);
 				if (!profile) return;
 				const old = entry?.profile;
 				const authChange = old?.auth === "key" && (profile.auth !== "key" || profile.key !== old.key || profile.baseUrl !== old.baseUrl || profile.api !== old.api);
@@ -231,7 +241,7 @@ export default function customProviders(pi) {
 				if (await ui.select(`Save custom provider?\n${summary}`, ["Cancel", "Save provider"], { blockedKind: "permission" }) !== "Save provider") return;
 				checkConflict();
 				store.save(profile, entry?.revision);
-				pi.registerProvider(providerFromProfile(profile));
+				register(profile);
 				void ctx.modelRegistry.refresh({ allowNetwork: false, providers: [id], signal: AbortSignal.timeout(4_000) }).catch(() => {});
 				const saved = action === "Replace API key" ? "API key replaced for" : "Custom provider saved:";
 				ui.notify(`${saved} ${providerLabel(profile)}. Open /model to select it, or /reload if it is not listed yet.`, "info");
@@ -240,4 +250,49 @@ export default function customProviders(pi) {
 			}
 		},
 	});
+
+	async function manageProvider(action, { profile, revision }, store, ctx) {
+		const { ui } = ctx;
+		const { id } = profile;
+		function checkRuntime() {
+			if (!ctx.isIdle()) throw new Error("Wait for the current turn to finish.");
+			const active = ctx.modelRegistry.getProvider(id);
+			if (active && active !== registered.get(id)) throw new Error("This provider ID is also registered by another source. Reload after resolving the conflict.");
+			return active;
+		}
+
+		checkRuntime();
+		if (action === "Rename display name") {
+			const input = await providerInput(ui, `Display name for ${id} (capitalization only)`, { initial: profile.displayName });
+			if (input === undefined || input.trim() === profile.displayName) return;
+			const displayName = input.trim();
+			checkRuntime();
+			store.renameDisplayName(id, revision, displayName);
+			register({ ...profile, displayName });
+			ui.notify(`Provider display name saved: ${providerLabel({ id, displayName })}.`, "info");
+			return;
+		}
+
+		function checkDeletion() {
+			const active = checkRuntime();
+			if (ctx.model?.provider === id) throw new Error("Select a different current model with /model before deleting this provider.");
+			if (pi.getSettings().defaultProvider === id || store.defaultProvider() === id) {
+				throw new Error("Set a different default with /model before deleting this provider.");
+			}
+			if (ctx.scopedModels.some(({ model }) => model.provider === id)) {
+				throw new Error("Remove this provider's models from /scoped-models before deleting it.");
+			}
+			return active;
+		}
+
+		checkDeletion();
+		const remove = "Delete provider and saved data";
+		const summary = `Delete ${providerLabel(profile)}?\nRemove the saved connection and ${profile.models.length} model IDs${profile.auth === "key" ? ", its saved API key" : ""}${profile.lanHttpApprovedUrl ? ", and its LAN HTTP approval" : ""}.`;
+		if (await ui.select(summary, ["Cancel", remove], { blockedKind: "permission" }) !== remove) return;
+		const active = checkDeletion();
+		store.remove(id, revision);
+		if (active) pi.unregisterProvider(id);
+		registered.delete(id);
+		ui.notify(`Custom provider deleted: ${providerLabel(profile)}.`, "info");
+	}
 }
