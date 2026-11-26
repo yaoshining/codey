@@ -1,4 +1,5 @@
 """Run Codey ACP over stdio and exercise the installed entry on real Apple Seatbelt."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -97,8 +98,19 @@ def run(binary, t3_fixture=None):
         write_skill(standard, "standard-notes", "Standard personal fixture", "STANDARD_SKILL_BODY $ARGUMENTS")
         write_skill(standard, "personal-notes", "Duplicate personal fixture", "STANDARD_SHADOW_SKILL_BODY")
         write_skill(standard, "writable-notes", "Group-writable fixture", "UNTRUSTED_BODY").chmod(0o664)
-        external = write_skill(home / ".local/share/fixtures", "ego-browser", "External fixture", "EXTERNAL_SKILL_BODY")
-        (standard / "ego-browser").symlink_to(external.parent, target_is_directory=True)
+        resources = root / "Applications/ego lite.app/Contents/Frameworks/ego Framework.framework/Versions/0.6.3.17/Resources/ego-skills"
+        external = write_skill(resources, "ego-browser", "External fixture", "EXTERNAL_SKILL_BODY")
+        external.chmod(0o664)
+        ego = home / ".local/share/ego"
+        ego.mkdir(parents=True)
+        (ego / "ego-skills").symlink_to(external.parent, target_is_directory=True)
+        (standard / "ego-browser").symlink_to(ego / "ego-skills", target_is_directory=True)
+        duplicate = agent / "skills/standard-notes"
+        duplicate.symlink_to(standard / "standard-notes", target_is_directory=True)
+        internal = write_skill(standard / "shared", "shared-notes", "Internal linked fixture", "INTERNAL_LINK_SKILL_BODY")
+        (standard / "shared-notes").symlink_to(internal.parent, target_is_directory=True)
+        (standard / "broken-notes").symlink_to(standard / "missing")
+        (standard / "cycle-notes").symlink_to(standard / "cycle-notes")
         project = workspace / ".agents/skills"
         write_skill(project, "project-notes", "Project fixture", "PROJECT_SKILL_BODY $ARGUMENTS")
         write_skill(project, "openspec-verify-change", ">-\n  Verify implementation against a change artifact.\n  Report issues with file locations.", "OPENSPEC_SKILL_BODY $ARGUMENTS")
@@ -111,6 +123,10 @@ def run(binary, t3_fixture=None):
         (project / "remote-notes").symlink_to(outside.parent, target_is_directory=True)
         (project / "linked-file").mkdir()
         (project / "linked-file/SKILL.md").symlink_to(outside)
+        linked = write_skill(workspace / "skill-templates", "linked-notes", "In-workspace fixture", "PROJECT_LINK_SKILL_BODY")
+        (project / "linked-notes").symlink_to(linked.parent, target_is_directory=True)
+        (project / "broken-notes").symlink_to(workspace / "missing")
+        (project / "cycle-notes").symlink_to(project / "cycle-notes")
         (workspace / ".env").write_text("protected")
         marker = other / "fixture"
         marker.write_text("outside")
@@ -125,6 +141,24 @@ def run(binary, t3_fixture=None):
         Thread(target=server.serve_forever, daemon=True).start()
         env = {"HOME": str(home), "PATH": os.environ["PATH"], "PI_SKIP_VERSION_CHECK": "1",
                "T3_ACP_MCP_AUTHORIZATION": "synthetic-ignored-token"}
+        def trust_command(*arguments, succeeds=True):
+            result = subprocess.run([binary, "acp", "skills", *map(str, arguments)], capture_output=True,
+                                    text=True, env=env, cwd=workspace, timeout=20)
+            assert (result.returncode == 0) == succeeds, result
+            return result.stdout if succeeds else result.stderr
+        expected_pin = {"root": str(standard), "path": str(external), "sha256": hashlib.sha256(external.read_bytes()).hexdigest()}
+        assert json.loads(trust_command("inspect", "ego-browser")) == expected_pin
+        assert "changed" in trust_command("trust", "ego-browser", external, "0" * 64, succeeds=False)
+        with Acp(binary, args, workspace, env) as unapproved:
+            unapproved.initialize()
+            sid = unapproved.request("session/new", cwd=str(workspace), mcpServers=[])["sessionId"]
+            denied = unapproved.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "$ego-browser"}], succeeds=False)
+            assert "needs approval" in denied["message"] and str(external) not in str(denied)
+        empty = next((agent / "sandbox-acp").glob(f"*/{sid}"))
+        assert not any(json.loads(line).get("type") == "message" for line in empty.read_text().splitlines())
+        empty.unlink()
+        trust_command("trust", "ego-browser", external, expected_pin["sha256"])
+        assert not (agent / "skills/ego-browser").exists() and (standard / "ego-browser").is_symlink()
         subprocess.run(["/usr/bin/curl", "--silent", "--noproxy", "*", endpoint + "/probe"], check=True, env=env)
         for directory in ("/", str(home), str(workspace)):
             with Acp(binary, args, directory, env) as probe:
@@ -154,8 +188,11 @@ def run(binary, t3_fixture=None):
                 probe.request("session/delete", sessionId=sid)
                 probe.request("session/set_config_option", sessionId=sid, configId="thinking", value="low", succeeds=False)
                 notices = [frame["params"]["update"] for frame in probe.seen if "method" in frame]
+                assert str(external) not in str(probe.seen) and "EXTERNAL_SKILL_BODY" not in str(probe.seen)
                 assert notices == [{"sessionUpdate": "available_commands_update", "availableCommands": [
+                    {"name": "$ego-browser", "description": "External fixture"},
                     {"name": "$personal-notes", "description": "Personal fixture"},
+                    {"name": "$shared-notes", "description": "Internal linked fixture"},
                     {"name": "$standard-notes", "description": "Standard personal fixture"},
                 ]}], notices
             if directory != str(workspace):
@@ -166,7 +203,8 @@ def run(binary, t3_fixture=None):
             version = subprocess.check_output([binary, "--version"], text=True, cwd=workspace, env=env).strip()
             subprocess.run(["node", t3_fixture, binary, str(workspace), "probe", version], check=True, env=env, timeout=140)
         assert not Model.requests and not Gateway.responses and Model.probes == 1 and not injected.exists()
-        assert not (agent / "sandbox-acp").exists() and not (agent / "auth.json").exists()
+        assert not list((agent / "sandbox-acp").glob("*/*.jsonl"))
+        assert not (agent / "auth.json").exists()
         print("PASS: discovery only, with invalid workspace roots, no persistence, network or tools.", flush=True)
         setup = {"cwd": str(workspace), "mcpServers": []}
         with Acp(binary, args, workspace, env) as acp:
@@ -187,7 +225,9 @@ def run(binary, t3_fixture=None):
             assert len(files) == 1 and files[0].name == session_id and files[0].stat().st_mode & 0o777 == 0o600
             assert len(result["configOptions"][0]["options"]) == 3
             catalog = acp.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
-            assert {item["name"] for item in catalog["params"]["update"]["availableCommands"]} == {"$personal-notes", "$standard-notes", "$project-skills"}
+            assert {item["name"] for item in catalog["params"]["update"]["availableCommands"]} == {
+                "$ego-browser", "$personal-notes", "$shared-notes", "$standard-notes", "$project-skills"
+            }
             model = acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             thinking = model["configOptions"][1]["options"]
             selected = next(option["value"] for option in thinking if option["value"] == "low")
@@ -213,10 +253,11 @@ def run(binary, t3_fixture=None):
                 return acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": text}], succeeds=succeeds)
             assert skill_prompt("$project-skills")["stopReason"] == "end_turn"
             listing = acp.seen[-2]["params"]["update"]["content"]["text"]
-            assert len([line for line in listing.splitlines() if line.startswith("$")]) == 17
-            assert "$project-notes" in listing and "$remote-notes" not in listing
+            assert len([line for line in listing.splitlines() if line.startswith("$")]) == 18
+            assert "$project-notes" in listing and "Skipped $remote-notes" in listing and str(outside) not in listing
+            assert "Skipped $broken-notes" in listing and "Skipped $cycle-notes" in listing
             assert "$openspec-verify-change — Verify implementation against a change artifact. Report issues with file locations." in listing
-            for unavailable in ("$remote-notes", "$linked-file", "$dynamic-notes", "$ego-browser", "$writable-notes", "$large-args " + "x" * 100):
+            for unavailable in ("$remote-notes", "$linked-file", "$dynamic-notes", "$broken-notes", "$cycle-notes", "$writable-notes", "$large-args " + "x" * 100):
                 skill_prompt(unavailable, succeeds=False)
             assert len(Model.requests) == before_skills and not (workspace / "dynamic-ran").exists()
             assert skill_prompt("$personal-notes literal $(touch skill-ran)")["stopReason"] == "end_turn"
@@ -224,6 +265,26 @@ def run(binary, t3_fixture=None):
             assert "SHADOW_SKILL_BODY" not in str(Model.requests[-1]["messages"]) and not (workspace / "skill-ran").exists()
             assert skill_prompt("Please apply $project-notes here")["stopReason"] == "end_turn"
             assert "PROJECT_SKILL_BODY" in str(Model.requests[-1]["messages"])
+            for command, body in (("$linked-notes", "PROJECT_LINK_SKILL_BODY"), ("$ego-browser", "EXTERNAL_SKILL_BODY"),
+                                  ("$shared-notes", "INTERNAL_LINK_SKILL_BODY")):
+                assert skill_prompt(command)["stopReason"] == "end_turn"
+                assert body in str(Model.requests[-1]["messages"])
+                assert str(external) not in str(Model.requests[-1])
+            before_changes = len(Model.requests)
+            saved = external.read_bytes()
+            external.write_bytes(saved + b"\nchanged content")
+            assert "changed" in skill_prompt("$ego-browser", succeeds=False)["message"]
+            external.write_bytes(saved)
+            alternate = root / "alternate skill"
+            alternate.mkdir()
+            (alternate / "SKILL.md").write_bytes(saved)
+            (ego / "ego-skills").unlink()
+            (ego / "ego-skills").symlink_to(alternate, target_is_directory=True)
+            assert "different file" in skill_prompt("$ego-browser", succeeds=False)["message"]
+            assert "target changed" in trust_command("trust", "ego-browser", external, expected_pin["sha256"], succeeds=False)
+            (ego / "ego-skills").unlink()
+            (ego / "ego-skills").symlink_to(external.parent, target_is_directory=True)
+            assert len(Model.requests) == before_changes
             assert acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": "slow fixture"}])["stopReason"] == "cancelled"
             Model.release.set()
             changed = acp.request("session/set_config_option", sessionId=session_id, configId="model", value=alias)
@@ -284,6 +345,12 @@ def run(binary, t3_fixture=None):
                 assert len(prompts) == 1 and "Selected skill" not in prompts[0], prompts
             assert not any("PERSONAL_SKILL_BODY" in last_user(item) for item in requests)
             assert not injected.exists() and Model.probes == 1
+        trust_command("untrust", "ego-browser")
+        with Acp(binary, args, workspace, env) as revoked:
+            revoked.initialize()
+            revoked.request("session/new", **setup)
+            notice = revoked.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
+            assert all(command["name"] != "$ego-browser" for command in notice["params"]["update"]["availableCommands"])
         server.shutdown()
 
 

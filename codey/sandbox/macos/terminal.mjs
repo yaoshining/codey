@@ -14,6 +14,7 @@ import { takeOverStdout } from "../../../packages/coding-agent/src/core/output-g
 import { styleInfo, styleReviewMarker } from "../../branding.mjs";
 import { reviewSystemPrompt } from "../../extensions/review.mjs";
 import { runSandboxAcp } from "./acp.mjs";
+import { manageSkillTrust } from "./acp-skills.mjs";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
 import { projectDomains } from "./project-domains.mjs";
@@ -80,6 +81,10 @@ function emptyResources() {
 
 async function launch() {
 	const acp = process.env.CODEY_ACP_ENTRY === "1";
+	if (acp && process.argv[2] === "skills") {
+		console.log(manageSkillTrust(realpathSync(homedir()), process.argv.slice(3)));
+		return;
+	}
 	const { values } = parseArgs({
 		options: {
 			sandbox: { type: "string" },
@@ -101,7 +106,7 @@ async function launch() {
 		},
 	});
 	if (acp) {
-		const acpHelp = "Usage: codey acp --sandbox=workspace-write [--workspace <directory>] [--provider <name> --model <id>]";
+		const acpHelp = "Usage: codey acp --sandbox=workspace-write [--workspace <directory>] [--provider <name> --model <id>]\n       codey acp skills --help";
 		if (values.help) return console.log(acpHelp);
 		if (values.sandbox !== "workspace-write") throw new Error(acpHelp);
 		if (Object.keys(values).some((key) => !["sandbox", "workspace", "provider", "model"].includes(key))) {

@@ -30,7 +30,7 @@ try {
 	} else if (name === "acp-skills") {
 		console.log(JSON.stringify(discoverSkills(process.cwd(), "project")));
 	} else if (name === "acp-skill") {
-		console.log(JSON.stringify({ skill: loadSkill(process.cwd(), "project", args.name) }));
+		console.log(JSON.stringify(loadSkill(process.cwd(), "project", args.name)));
 	} else {
 		const tool = toolDefinitions(process.cwd()).find((definition) => definition.name === name);
 		if (!tool) throw new Error("Tool unavailable in the macOS sandbox.");
