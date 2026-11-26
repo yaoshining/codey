@@ -1,0 +1,64 @@
+name: Verify Codey Seatbelt local models
+
+on:
+  push:
+    branches: [verify/codey-macos-sandbox-models]
+    paths: [.github/workflows/codey-sandbox-models.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Official Node 24
+            os: macos-15
+            brew: false
+          - name: Homebrew Node 26 and OpenSSL 4
+            os: xcode-27
+            brew: true
+    steps:
+      - name: Check out fixed Codey candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: a5e07eee664e4cdfed58af1e022058323a5c6835
+          persist-credentials: false
+      - name: Select official Node 24
+        if: ${{ !matrix.brew }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24.22.3"
+          package-manager-cache: false
+      - name: Select Homebrew Node 26
+        if: matrix.brew
+        shell: bash
+        run: |
+          brew install node
+          prefix="$(brew --prefix node)"
+          if ! "$prefix/bin/node" -e 'process.exit(process.versions.node.startsWith("26.") && process.versions.openssl.startsWith("4.") ? 0 : 1)'; then
+            brew upgrade node
+          fi
+          "$prefix/bin/node" -e 'process.exit(process.versions.node.startsWith("26.") && process.versions.openssl.startsWith("4.") ? 0 : 1)'
+          printf '%s\n' "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Install public dependencies
+        shell: bash
+        run: |
+          sw_vers
+          uname -m
+          git rev-parse HEAD
+          node -p 'JSON.stringify({exec: require("node:fs").realpathSync(process.execPath), node: process.versions.node, openssl: process.versions.openssl})'
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+      - name: Run the public terminal with a synthetic worktree and fake model
+        shell: bash
+        run: |
+          node --test codey/test/macos-sandbox.test.mjs codey/test/macos-host-model.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/integration.py ./codey/bin/codey
