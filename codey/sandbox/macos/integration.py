@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -16,8 +17,16 @@ import pexpect
 
 class FakeModel(BaseHTTPRequestHandler):
     requests = []
+    approved_reads = []
 
     def do_GET(self):
+        if self.path in ("/approved", "/denied", "/timeout"):
+            self.approved_reads.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"CONTROLLED_HTTPS_RESPONSE")
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"baseline")
@@ -25,7 +34,22 @@ class FakeModel(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.requests.append(body)
-        if not any(m["role"] == "tool" for m in body["messages"]):
+        latest_user = max(i for i, m in enumerate(body["messages"]) if m["role"] == "user")
+        latest_tools = [m for m in body["messages"][latest_user:] if m["role"] == "tool"]
+        prompt = str(body["messages"][latest_user]["content"])
+        read_path = next((path for path in ["approved", "denied", "timeout"] if f"request {path} read" in prompt), None)
+        if read_path and not latest_tools:
+            delta = {"role": "assistant", "tool_calls": [{
+                "index": 0, "type": "function", "id": f"fixture_{read_path}",
+                "function": {"name": "https_read", "arguments": json.dumps({"url": f"https://codey-approval.example/{read_path}"})},
+            }]}
+            finish = "tool_calls"
+        elif read_path:
+            content = str(latest_tools[-1]["content"])
+            expected = "CONTROLLED_HTTPS_RESPONSE" if read_path == "approved" else "HTTPS read was not approved."
+            delta = {"role": "assistant", "content": "APPROVAL_FLOW_FINISHED" if expected in content else "UNEXPECTED_TOOL_RESULT"}
+            finish = "stop"
+        elif not latest_tools:
             delta = {"role": "assistant", "tool_calls": [{
                 "index": 0, "type": "function", "id": "fixture_write",
                 "function": {"name": "write", "arguments": '{"path":"model-output","content":"model fixture"}'},
@@ -46,7 +70,9 @@ class FakeModel(BaseHTTPRequestHandler):
 
 def main():
     binary = Path(sys.argv[1]).absolute()
-    with tempfile.TemporaryDirectory(prefix="codey-mac-test-") as temp, ThreadingHTTPServer(("127.0.0.1", 0), FakeModel) as server:
+    with (tempfile.TemporaryDirectory(prefix="codey-mac-test-") as temp,
+          ThreadingHTTPServer(("127.0.0.1", 0), FakeModel) as server,
+          ThreadingHTTPServer(("127.0.0.1", 0), FakeModel) as tls_server):
         Thread(target=server.serve_forever, daemon=True).start()
         root = Path(temp).resolve()
         home, source, linked = (root / name for name in ("fixture home", "main repo", "linked workspace"))
@@ -137,7 +163,7 @@ def main():
         assert index.read_bytes() == old_index
         assert (source / "tracked").read_text() == "committed"
         assert len(FakeModel.requests) == 2
-        assert {t["function"]["name"] for t in FakeModel.requests[0]["tools"]} == {"read", "write", "edit", "bash", "ls"}
+        assert {t["function"]["name"] for t in FakeModel.requests[0]["tools"]} == {"read", "write", "edit", "bash", "ls", "https_read"}
         assert "CONTEXT_EXCLUDED" not in json.dumps(FakeModel.requests)
         assert "MANUAL_OK" in json.dumps(FakeModel.requests)
         print("PASS: the public terminal fenced manual commands and model writes; fake model and linked metadata verified.", flush=True)
@@ -186,6 +212,48 @@ def main():
             assert json.loads((agent / "auth.json").read_text()) == {provider: credential}
         assert len(FakeModel.requests) == 2
         print("PASS: built-in model selection with stored API key and OAuth metadata, and login guidance without credentials.", flush=True)
+
+        (agent / "models.json").write_text(json.dumps(raw_config))
+        config, cert, key = (root / name for name in ("tls.cnf", "tls-cert", "tls-key"))
+        config.write_text("[req]\ndistinguished_name=dn\n[dn]\n[fixture]\nsubjectAltName=DNS:codey-approval.example\n")
+        subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=codey-approval.example", "-config", str(config), "-extensions", "fixture",
+                        "-keyout", str(key), "-out", str(cert)], check=True, capture_output=True)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        tls_server.socket = context.wrap_socket(tls_server.socket, server_side=True)
+        Thread(target=tls_server.serve_forever, daemon=True).start()
+        wrapper_dir = root / "node-wrapper"
+        wrapper_dir.mkdir()
+        wrapper = wrapper_dir / "node"
+        preload = binary.parent.parent / "test/fixtures/https-approval-local.mjs"
+        wrapper.write_text(f'#!/bin/sh\nexec {quote(node_path)} --import {quote(preload)} "$@"\n')
+        wrapper.chmod(0o700)
+        approval_env = {**env, "PATH": f"{wrapper_dir}:{env['PATH']}",
+                        "CODEY_FIXTURE_PORT": str(tls_server.server_port), "CODEY_FIXTURE_CERT": str(cert)}
+        with pexpect.spawn(str(binary), args, cwd=linked, env=approval_env, encoding="utf-8", timeout=45) as terminal:
+            terminal.expect_exact("codey-sandbox> ")
+            for path in ["denied", "approved", "timeout"]:
+                terminal.send(f"request {path} read\r")
+                url = f"https://codey-approval.example/{path}"
+                terminal.expect_exact(f"Operation: HTTPS GET {url}")
+                terminal.expect_exact(f"Working directory: {json.dumps(str(linked))}")
+                terminal.expect_exact("Destination: codey-approval.example:443")
+                terminal.expect(r"Type (approve [0-9a-f]{8}) to allow this request once")
+                assert FakeModel.approved_reads == (["/approved"] if path == "timeout" else [])
+                if path == "approved":
+                    terminal.send(terminal.match.group(1) + "\r")
+                elif path == "denied":
+                    terminal.send("\r")
+                terminal.expect_exact("APPROVAL_FLOW_FINISHED")
+                terminal.expect_exact("codey-sandbox> ")
+            terminal.send("/quit\r")
+            terminal.expect(pexpect.EOF)
+            terminal.close()
+            assert terminal.exitstatus == 0
+        assert FakeModel.approved_reads == ["/approved"]
+        print("PASS: fake model requested approval, only the approved call reached the controlled service, and the turn continued.", flush=True)
+        tls_server.shutdown()
         server.shutdown()
 
 
