@@ -151,6 +151,41 @@ def main():
             assert terminal.exitstatus == 1
         assert len(FakeModel.requests) == 2
         print("PASS: executable credentials refused before any model request.", flush=True)
+
+        (agent / "models.json").unlink()
+        (agent / "auth.json").unlink()
+        builtin_args = ["--sandbox", "workspace-write"]
+        builtin_env = {key: value for key, value in env.items() if key != "OPENAI_API_KEY"}
+        guidance = "Exit with /quit, run regular codey and use /login there, then reopen this sandbox."
+        with pexpect.spawn(str(binary), builtin_args, cwd=linked, env=builtin_env, encoding="utf-8", timeout=30) as terminal:
+            terminal.expect_exact("codey-sandbox> ")
+            assert f"No models available. {guidance}" in terminal.before, terminal.before
+            for text in ["/login", "A prompt without a model"]:
+                terminal.send(text + "\r")
+                terminal.expect_exact(guidance)
+                assert "Use /login to log into" not in terminal.before
+                terminal.expect_exact("codey-sandbox> ")
+            terminal.send("/quit\r")
+            terminal.expect(pexpect.EOF)
+            terminal.close()
+            assert terminal.exitstatus == 0
+
+        for provider, credential in [
+            ("openai", {"type": "api_key", "key": "fake-stored-key"}),
+            ("openai-codex", {"type": "oauth", "access": "fake-access", "refresh": "fake-refresh", "expires": 0}),
+        ]:
+            (agent / "auth.json").write_text(json.dumps({provider: credential}))
+            (agent / "settings.json").write_text(json.dumps({"defaultProvider": provider, "defaultModel": "gpt-6-luna"}))
+            with pexpect.spawn(str(binary), builtin_args, cwd=linked, env=builtin_env, encoding="utf-8", timeout=30) as terminal:
+                terminal.expect_exact("codey-sandbox> ")
+                assert f"Model: {provider}/gpt-6-luna" in terminal.before, terminal.before
+                terminal.send("/quit\r")
+                terminal.expect(pexpect.EOF)
+                terminal.close()
+                assert terminal.exitstatus == 0
+            assert json.loads((agent / "auth.json").read_text()) == {provider: credential}
+        assert len(FakeModel.requests) == 2
+        print("PASS: built-in model selection with stored API key and OAuth metadata, and login guidance without credentials.", flush=True)
         server.shutdown()
 
 
