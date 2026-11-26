@@ -1,8 +1,9 @@
 // Lightweight terminal host for the opt-in macOS sandbox. No Pi CLI discovery.
+import { randomBytes } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface } from "node:readline/promises";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { createExtensionRuntime } from "../../../packages/coding-agent/src/core/extensions/loader.ts";
 import { findInitialModel } from "../../../packages/coding-agent/src/core/model-resolver.ts";
@@ -10,19 +11,45 @@ import { createAgentSession } from "../../../packages/coding-agent/src/core/sdk.
 import { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
 import { hostModel } from "./host-model.mjs";
+import { httpsReadTool } from "./https-read.mjs";
 import { openSeatbelt } from "./seatbelt.mjs";
 import { toolDefinitions } from "./tools.mjs";
 
 const help = `Usage: codey --sandbox workspace-write [--workspace <directory>] [--provider <name> --model <id>]
 
-Open an interactive macOS session using the current files. Tools and !/!! commands
-run in Seatbelt, without network. Model requests run on the host.
+Open an interactive macOS session using the current files. Shell and file tools
+run offline in Seatbelt. A model can request one HTTPS read for your approval.
+Model requests run on the host.
 Supported terminal commands: /help, /quit, !command, !!command.`;
 const loginGuidance = "Exit with /quit, run regular codey and use /login there, then reopen this sandbox.";
 const noModel = `No models available. ${loginGuidance}`;
 
 function display(value) {
 	return stripVTControlCharacters(String(value)).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+}
+
+function terminalApproval(input, workspace) {
+	const closed = new AbortController();
+	input.once("close", () => closed.abort());
+	let pending = false;
+	return async (url, signal) => {
+		if (pending || closed.signal.aborted || signal?.aborted) return false;
+		pending = true;
+		const answer = `approve ${randomBytes(4).toString("hex")}`;
+		const signals = [closed.signal, AbortSignal.timeout(30_000)];
+		if (signal) signals.push(signal);
+		const decision = AbortSignal.any(signals);
+		try {
+			console.log(`\nNetwork approval requested\nOperation: HTTPS GET ${url}\nWorking directory: ${JSON.stringify(workspace)}\nDestination: ${new URL(url).host}:443`);
+			const reply = await input.question(`Type ${answer} to allow this request once, or press Enter to deny: `, { signal: decision });
+			return !decision.aborted && reply === answer;
+		} catch (error) {
+			if (!decision.aborted) throw error;
+			return false;
+		} finally {
+			pending = false;
+		}
+	};
 }
 
 function emptyResources() {
@@ -64,6 +91,7 @@ async function terminal() {
 	const sandbox = await openSeatbelt(workspace, home);
 	let runtime;
 	let session;
+	let input;
 	try {
 		const host = await hostModel(home, workspace, sandbox.hostDir);
 		runtime = host.runtime;
@@ -88,6 +116,8 @@ async function terminal() {
 				return { content, details: undefined, isError };
 			},
 		}));
+		input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
+		customTools.push(httpsReadTool(terminalApproval(input, workspace)));
 		const result = await createAgentSession({
 			cwd: workspace, agentDir: host.agentDir, modelRuntime: runtime, model: model || undefined,
 			settingsManager: settings, resourceLoader: emptyResources(), sessionManager: SessionManager.inMemory(workspace),
@@ -95,8 +125,9 @@ async function terminal() {
 		});
 		session = result.session;
 		// The SDK's Agent can expose a placeholder even when model selection returned nothing.
-		await readCommands(workspace, session, sandbox, model);
+		await readCommands(workspace, session, sandbox, model, input);
 	} finally {
+		input?.close();
 		session?.dispose();
 		try {
 			await runtime?.settleCredentialWrites();
@@ -106,12 +137,11 @@ async function terminal() {
 	}
 }
 
-async function readCommands(workspace, session, sandbox, model) {
+async function readCommands(workspace, session, sandbox, model, input) {
 	console.log(`Codey macOS sandbox (workspace-write): ${display(workspace)}`);
 	if (model) console.log(`Model: ${display(model.provider)}/${display(model.id)}`);
 	else console.error(noModel);
-	console.log("Tools are offline. Model requests use the host. Type /help or /quit.");
-	const input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
+	console.log("Shell and file tools are offline. HTTPS reads require approval. Type /help or /quit.");
 	let active;
 	input.on("SIGINT", () => {
 		if (active) {
