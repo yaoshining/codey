@@ -1,5 +1,7 @@
 # Contributing to pi
 
+For changes to Codey that users can see, update the affected pages in the [Codey Wiki source](docs/wiki/README.md) in the same change. Check commands against the CLI before documenting them.
+
 This guide exists to save both sides time.
 
 ## Philosophy
