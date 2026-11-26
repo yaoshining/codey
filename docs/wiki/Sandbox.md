@@ -14,7 +14,9 @@ codey --sandbox workspace-write
 codey --sandbox workspace-write --workspace /path/to/task
 ```
 
-允许编辑工作区及私有临时目录，包括现有 worktree 和未提交文件。用户 Home、常见凭据文件和 Git 管理路径受保护。可用 `!` 或 `!!` 执行离线命令，`!!` 的输出不进入模型上下文。退出后不会保存这次沙箱会话。MCP、扩展、项目资源自动发现、附件、`/review`、工作树管理及 RPC/T3 不可用。缺少 Seatbelt 或启动检查失败时，Codey 会停止。 [macOS 详细边界](../../codey/sandbox/macos/README.md)
+允许编辑工作区及私有临时目录，包括现有 worktree 和未提交文件。用户 Home、常见凭据文件和 Git 管理路径受保护。可用 `!` 或 `!!` 执行离线命令，`!!` 的输出不进入模型上下文。退出后不会保存这次沙箱会话。MCP、扩展、项目资源自动发现、附件、工作树管理及 RPC/T3 不可用。缺少 Seatbelt 或启动检查失败时，Codey 会停止。 [macOS 详细边界](../../codey/sandbox/macos/README.md)
+
+在带有本地 `.git` 目录的仓库根目录运行沙箱，输入 `/review` 可流式审查暂存、未暂存和未忽略的未跟踪文本改动。审查使用项目的忽略规则和 `.git/info/exclude`。收集改动的 Git worker 只能读取工作区和指定 Git 元数据，模型经宿主收取有大小限制的补丁，审查轮没有工具。结果直接显示在当前对话，Ctrl+C 可中止并继续输入。Linked worktree、带基准分支的审查、受保护文件、符号链接和非文本改动不受支持。请把其他敏感资料放在工作区外。普通模式 `/review` 仍支持原有范围。
 
 ### HTTPS 审批与项目白名单
 

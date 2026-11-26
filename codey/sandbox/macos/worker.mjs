@@ -1,6 +1,7 @@
 // Runs only after the parent has started /usr/bin/sandbox-exec.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { collectSandboxReview } from "./review-git.mjs";
 import { toolDefinitions } from "./tools.mjs";
 
 try {
@@ -23,6 +24,8 @@ try {
 		}
 		if (!denied) throw new Error("Seatbelt did not deny access to the host preflight file.");
 		console.log(JSON.stringify({ ready: true }));
+	} else if (name === "review") {
+		console.log(JSON.stringify({ patches: collectSandboxReview(process.cwd(), args.git, process.env.TMPDIR) }));
 	} else {
 		const tool = toolDefinitions(process.cwd()).find((definition) => definition.name === name);
 		if (!tool) throw new Error("Tool unavailable in the macOS sandbox.");

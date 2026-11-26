@@ -1,5 +1,5 @@
 // Terminal adaptation of docs/assets/codey-mark.svg.
-import { backgroundAnsi, foregroundAnsi, rgbColor } from "@earendil-works/pi-tui";
+import { backgroundAnsi, foregroundAnsi, rgbColor, styleText } from "@earendil-works/pi-tui";
 import { codeyVersion } from "./version.mjs";
 
 const pixels = [
@@ -23,7 +23,8 @@ const colors = { ".": palette.surface, C: palette.mark, ">": palette.accent };
 const colorEnabled = () => !process.env.NO_COLOR && process.env.FORCE_COLOR !== "0" && process.env.TERM !== "dumb";
 
 export function styleReviewMarker(text, theme) {
-	return colorEnabled() ? theme.style(text, { fg: palette.accent, bg: palette.surface }) : text;
+	const style = { fg: palette.accent, bg: palette.surface };
+	return colorEnabled() ? (theme ? theme.style(text, style) : styleText(text, style, "truecolor")) : text;
 }
 
 export function styleInfo(text, theme) {
