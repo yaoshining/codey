@@ -224,8 +224,9 @@ def run(binary):
             assert not profile.exists()
             enter(tty, "/model")
             tty.expect_exact("[local-tls]")
-            tty.send("lan-model")
-            tty.expect_exact("No matching models")
+            model_rows = tty.before
+            tty.expect(PROMPT)
+            assert "[litellm]" not in model_rows + tty.before
             tty.send("\x03")
             time.sleep(.25)
             quit(tty)
