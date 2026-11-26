@@ -144,32 +144,38 @@ async function launch() {
 	if (!rpc && !acp && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("An interactive Codey terminal is required. Use --mode rpc for JSONL.");
 	if (Boolean(values.provider) !== Boolean(values.model)) throw new Error("Specify --provider and --model together.");
 
-	const workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
-	if (!lstatSync(workspace).isDirectory()) throw new Error("The workspace must be a directory.");
 	const home = realpathSync(homedir());
-	const hostDir = mkdtempSync("/private/tmp/codey-sandbox-model-");
+	let hostDir;
 	let runtime;
 	let input;
 	let initial;
 	const startup = new AbortController();
-	const startupSignals = rpc || acp ? ["SIGTERM", "SIGINT", "SIGHUP"] : [];
+	const startupSignals = rpc ? ["SIGTERM", "SIGINT", "SIGHUP"] : [];
 	const cancelStartup = () => startup.abort();
 	const finishedStartup = () => {
 		for (const signal of startupSignals) process.off(signal, cancelStartup);
 	};
 	for (const signal of startupSignals) process.on(signal, cancelStartup);
-	try {
-		initial = await openSeatbelt(workspace, home, startup.signal);
+	async function prepare(metadataOnly, signal) {
+		let workspace;
+		if (!metadataOnly) {
+			workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
+			if (!lstatSync(workspace).isDirectory()) throw new Error("The workspace must be a directory.");
+			initial = await openSeatbelt(workspace, home, signal);
+		}
+		hostDir = mkdtempSync("/private/tmp/codey-sandbox-model-");
+		// Even ambient credential checks must not resolve relative paths from the probe caller's cwd.
+		if (metadataOnly) process.chdir(hostDir);
 		const host = await hostModel(home, workspace, hostDir);
 		runtime = host.runtime;
-		startup.signal.throwIfAborted();
+		signal.throwIfAborted();
 		if (host.warning) console.error(host.warning);
 		let model = values.provider && runtime.getModel(values.provider, values.model);
 		if (values.provider && !model) throw new Error("The selected provider/model is unavailable.");
 		// An explicit selection can arrive while a newly registered provider's auth
 		// snapshot is being published. Confirm it through the underlying auth check.
 		if (model && !runtime.hasConfiguredAuth(model.provider) &&
-			!await runtime.checkAuth(model.provider, { signal: startup.signal })) {
+			!await runtime.checkAuth(model.provider, { signal })) {
 			throw new Error(`Authentication is unavailable for "${model.provider}". ${loginGuidance}`);
 		}
 		const { defaultProvider, defaultModel, defaultThinkingLevel } = host.settings;
@@ -179,6 +185,7 @@ async function launch() {
 			});
 			model = selection.model;
 		}
+		if (metadataOnly) return { runtime, model, defaultThinkingLevel };
 		const newSession = (cwd, sandbox, sessionManager, currentModel, extras = []) => {
 			const settingsManager = SettingsManager.inMemory({
 				defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true,
@@ -198,14 +205,12 @@ async function launch() {
 				tools: customTools.map(({ name }) => name), customTools,
 			});
 		};
-		if (acp) {
-			startup.signal.throwIfAborted();
-			finishedStartup();
-			return await runSandboxAcp({
-				workspace, home, runtime, model, wireWrite,
-				createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel),
-			});
-		}
+		return { workspace, runtime, model, newSession,
+			createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel) };
+	}
+	try {
+		if (acp) return await runSandboxAcp({ home, prepare, wireWrite });
+		const { workspace, model, newSession } = await prepare(false, startup.signal);
 		if (rpc) {
 			startup.signal.throwIfAborted();
 			finishedStartup();
@@ -238,7 +243,9 @@ async function launch() {
 		try {
 			await runtime?.settleCredentialWrites();
 		} finally {
-			try { initial?.close(); } finally { rmSync(hostDir, { recursive: true, force: true }); }
+			try { initial?.close(); } finally {
+				if (hostDir) rmSync(hostDir, { recursive: true, force: true });
+			}
 		}
 	}
 }

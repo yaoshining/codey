@@ -14,8 +14,9 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as Registry from "./src/server/AcpRegistrySupport.ts";
 import { AcpRegistrySettings } from "./src/settings.ts";
 import { makeAcpRegistryAdapterV2 } from "./src/server/adapter.ts";
+import { probeAcpRegistryConfiguration } from "./src/server/probe.ts";
 
-const [binary, cwd] = process.argv.slice(2);
+const [binary, cwd, mode] = process.argv.slice(2);
 const threadId = "thread:codey-acp-fixture";
 const selection = { instanceId: "acpRegistry", model: "fixture/fixture-think", options: [{ id: "thinking", value: "low" }] };
 const policy = { cwd, runtimeMode: "approval-required", interactionMode: "default" };
@@ -25,6 +26,30 @@ const services = Layer.mergeAll(node, IdAllocator.layer, McpProviderSessions.lay
 	TestProviderHost.layer({ cwd }).pipe(Layer.provide(node)),
 	Layer.succeed(HttpClient.HttpClient, HttpClient.make(() => Effect.die("Unexpected registry HTTP request."))));
 const layer = Registry.layerFromHost.pipe(Layer.provideMerge(services));
+const settings = Schema.decodeUnknownSync(AcpRegistrySettings)({
+	source: "local", commandPath: binary, commandArgs: ["acp", "--sandbox=workspace-write"],
+});
+
+const probeSettings = Effect.gen(function* () {
+	for (const directory of ["/", process.env.HOME, cwd]) {
+		const learned = new Map();
+		const { probe, slashCommands, skills } = yield* probeAcpRegistryConfiguration({
+			instanceId: selection.instanceId, settings, environment, cwd: directory,
+			modelDiscovery: {
+				onProbed: () => Effect.succeed(["fixture/fixture-think"]),
+				onDiscovered: (state) => Effect.sync(() => learned.set(state.currentModelId, state.configOptions)),
+			},
+		});
+		assert.ok(probe.ready && probe.sessionManagement.canDelete && !probe.sessionManagement.canLoad);
+		assert.equal(probe.currentModelId, "fixture/fixture-one");
+		assert.deepEqual(new Set(probe.models.map(({ id }) => id)),
+			new Set(["fixture/fixture-one", "fixture/fixture-think", "custom/metadata-only"]));
+		assert.ok(learned.get("fixture/fixture-think")?.some((option) =>
+			option.id === "thinking" && option.options?.some(({ id }) => id === "low")));
+		assert.deepEqual([slashCommands, skills], [[], []]);
+	}
+	console.log("PASS: real pinned T3 Settings probe discovered the configured models and per-model effort from /, HOME and the project.");
+}).pipe(Effect.provide(layer));
 
 function localCommand(fn, initialNativeThreadId) {
 	return Effect.gen(function* () {
@@ -33,9 +58,7 @@ function localCommand(fn, initialNativeThreadId) {
 		yield* mcp.set({ threadId, endpoint: "http://127.0.0.1:1/fixture", authorizationHeader: "Bearer fake-t3-token" });
 		const adapter = yield* makeAcpRegistryAdapterV2({
 			instanceId: selection.instanceId, environment,
-			settings: Schema.decodeUnknownSync(AcpRegistrySettings)({
-				source: "local", commandPath: binary, commandArgs: ["acp", "--sandbox=workspace-write"],
-			}),
+			settings,
 			selfInvocation: { command: "/usr/bin/false" },
 		});
 		const runtime = yield* adapter.openSession({
@@ -72,7 +95,7 @@ function send(runtime, providerThread, text, ordinal, interrupt = false) {
 	});
 }
 
-await Effect.runPromise(Effect.gen(function* () {
+const chat = Effect.gen(function* () {
 	const first = yield* localCommand((runtime) => Effect.gen(function* () {
 		const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
 		assert.equal(yield* send(runtime, thread, "t3-acp-first", 1), "completed");
@@ -87,4 +110,5 @@ await Effect.runPromise(Effect.gen(function* () {
 		assert.equal(yield* send(runtime, second, "slow fixture", 3, true), "interrupted");
 	}), nativeId);
 	console.log("PASS: pinned T3 Local command adapter negotiated ACP v1, prompted, cold-resumed and cancelled a turn.");
-}).pipe(Effect.timeout("120 seconds")));
+});
+await Effect.runPromise((mode === "probe" ? probeSettings : chat).pipe(Effect.timeout("120 seconds")));

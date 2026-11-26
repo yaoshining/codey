@@ -60,8 +60,10 @@ export function providerStore(home, workspace) {
 	const codey = join(home, ".codey");
 	const agent = join(codey, "agent");
 	const folder = join(agent, "custom-providers");
-	const rel = relative(workspace, agent);
-	if (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`)) return undefined;
+	if (workspace !== undefined) {
+		const rel = relative(workspace, agent);
+		if (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`)) return undefined;
+	}
 
 	function directory(create = false) {
 		for (const path of [codey, agent, folder]) {

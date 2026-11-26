@@ -49,6 +49,13 @@ def run(binary, t3_fixture=None):
             "models": [{"id": "fixture-one"}, {"id": "fixture-think", "reasoning": True,
                           "compat": {"supportsReasoningEffort": True}}],
         }}}))
+        (agent / "settings.json").write_text(json.dumps({"defaultProvider": "fixture", "defaultModel": "fixture-one"}))
+        profiles = agent / "custom-providers"
+        profiles.mkdir(mode=0o700)
+        profile = profiles / "custom.json"
+        profile.write_text(json.dumps({"displayName": "Custom", "api": "openai-completions", "auth": "none",
+                                      "baseUrl": endpoint + "/v1", "models": ["metadata-only"]}))
+        profile.chmod(0o600)
         (workspace / ".env").write_text("protected")
         marker = other / "fixture"
         marker.write_text("outside")
@@ -64,6 +71,38 @@ def run(binary, t3_fixture=None):
         env = {"HOME": str(home), "PATH": os.environ["PATH"], "PI_SKIP_VERSION_CHECK": "1",
                "T3_ACP_MCP_AUTHORIZATION": "synthetic-ignored-token"}
         subprocess.run(["/usr/bin/curl", "--silent", "--noproxy", "*", endpoint + "/probe"], check=True, env=env)
+        for directory in ("/", str(home), str(workspace)):
+            with Acp(binary, args, directory, env) as probe:
+                caps = probe.request("initialize", protocolVersion=2,
+                                     clientInfo={"name": "t3-code-provider-test", "version": "0.0.0"},
+                                     clientCapabilities={"fs": {"readTextFile": True}, "terminal": True})["agentCapabilities"]
+                assert not caps.get("loadSession") and caps["sessionCapabilities"]["delete"] == {}
+                setup = {"cwd": directory, "mcpServers": []}
+                result = probe.request("session/new", **setup)
+                sid = result["sessionId"]
+                assert {option["value"] for option in result["configOptions"][0]["options"]} == {
+                    "fixture/fixture-one", "fixture/fixture-think", "custom/metadata-only"
+                }
+                probe.request("session/set_config_option", sessionId=sid, configId="model", value="fixture/fixture-think")
+                probe.request("session/set_config_option", sessionId=sid, configId="thinking", value="low")
+                probe.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "boundary fixture"}], succeeds=False)
+                probe.request("session/load", sessionId=sid, **setup, succeeds=False)
+                probe.request("terminal/create", command="/bin/sh", succeeds=False)
+                probe.request("session/new", **{**setup, "mcpServers": [{"command": "/bin/sh", "args": ["-c", command]}]}, succeeds=False)
+                probe.request("session/new", **setup, additionalDirectories=[str(workspace)], succeeds=False)
+                probe.request("initialize", protocolVersion=1, clientInfo={"name": "standard"}, succeeds=False)
+                probe.request("session/delete", sessionId=sid)
+                probe.request("session/set_config_option", sessionId=sid, configId="thinking", value="low", succeeds=False)
+                assert not any("method" in frame for frame in probe.seen), probe.seen
+            if directory != str(workspace):
+                with Acp(binary, args, directory, env) as standard:
+                    standard.request("initialize", protocolVersion=1, clientInfo={"name": "ordinary-t3-chat"}, succeeds=False)
+                    standard.request("session/new", cwd=directory, mcpServers=[], succeeds=False)
+        if t3_fixture:
+            subprocess.run(["node", t3_fixture, binary, str(workspace), "probe"], check=True, env=env, timeout=140)
+        assert not Model.requests and Model.probes == 1 and not injected.exists()
+        assert not (agent / "sandbox-acp").exists() and not (agent / "auth.json").exists()
+        print("PASS: discovery only, with invalid workspace roots, no persistence, network or tools.", flush=True)
         setup = {"cwd": str(workspace), "mcpServers": []}
         with Acp(binary, args, workspace, env) as acp:
             assert not acp.request("session/new", succeeds=False, **setup).get("data")
@@ -81,7 +120,7 @@ def run(binary, t3_fixture=None):
             assert "/" not in session_id
             files = list((agent / "sandbox-acp").glob("*/*.jsonl"))
             assert len(files) == 1 and files[0].name == session_id and files[0].stat().st_mode & 0o777 == 0o600
-            assert len(result["configOptions"][0]["options"]) == 2
+            assert len(result["configOptions"][0]["options"]) == 3
             model = acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             thinking = model["configOptions"][1]["options"]
             selected = next(option["value"] for option in thinking if option["value"] == "low")
