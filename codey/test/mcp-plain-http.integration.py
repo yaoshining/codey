@@ -222,6 +222,7 @@ def run(binary):
             tty.expect_exact("\x1b[?2026l")
             enter(tty, "Invoke the synthetic MCP tool.")
             tty.expect_exact("MCP_TOOL_FINISHED")
+            tty.expect_exact("\x1b[?2026l")
             assert Server.model_received_tool
             assert any(row[:3] == ("/mcp", "tools/call", host) for row in Server.requests)
 
@@ -230,11 +231,12 @@ def run(binary):
                 before = len(Server.requests)
                 lookups = len(queries.read_text().splitlines())
                 reconnect(tty)
+                tty.expect_exact("The HTTP hostname did not resolve exclusively to private or loopback addresses.")
                 deadline = time.monotonic() + 10
                 while len(queries.read_text().splitlines()) == lookups and time.monotonic() < deadline:
-                    time.sleep(.05)
+                    # Drain PTY redraws while waiting for the lookup rather than blocking the child on stdout.
+                    tty.expect_exact(["\x1b[?2026l", pexpect.TIMEOUT], timeout=.1)
                 assert len(queries.read_text().splitlines()) > lookups
-                tty.expect_exact("The HTTP hostname did not resolve exclusively to private or loopback addresses.")
                 assert len(Server.requests) == before
             answers.write_text(json.dumps([local]))
             reconnect(tty)
