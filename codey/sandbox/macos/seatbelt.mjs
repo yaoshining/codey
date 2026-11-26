@@ -97,7 +97,7 @@ function runSeatbelt({ workspace, node, params, env, name, args, signal }) {
 	if (signal?.aborted) throw new Error("Operation cancelled.");
 	const child = spawn(backend, [
 		"-f", profile, ...Object.entries(params).flatMap(([key, value]) => ["-D", `${key}=${value}`]),
-		node, "--jitless", "--import", resolver, worker,
+		node, "--import", resolver, worker,
 	], { cwd: workspace, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
 	return new Promise((resolveResult, reject) => {
 		const out = [], err = [];
