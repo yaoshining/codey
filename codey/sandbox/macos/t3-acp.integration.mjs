@@ -11,10 +11,12 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Registry from "./src/server/AcpRegistrySupport.ts";
+import { AcpRegistryRuntimeCoordinator } from "./src/server/AcpRegistryRuntimeCoordinator.ts";
 import { AcpRegistrySettings } from "./src/settings.ts";
 import { makeAcpRegistryAdapterV2 } from "./src/server/adapter.ts";
 import { AcpRegistryDriver } from "./src/server/driver.ts";
@@ -54,7 +56,8 @@ const probeSettings = Effect.gen(function* () {
 			new Set(["fixture/fixture-one", "fixture/fixture-think", alias]));
 		assert.ok(learned.get("fixture/fixture-think")?.some((option) =>
 			option.id === "thinking" && option.options?.some(({ id }) => id === "low")));
-		assert.deepEqual([slashCommands, skills], [[], []]);
+		assert.deepEqual(slashCommands, []);
+		assert.deepEqual(skills.map(({ name, path }) => [name, path]), [["personal-notes", "acp://skill/personal-notes"]]);
 	}
 	console.log("PASS: real pinned T3 Settings probe discovered the configured models and per-model effort from /, HOME and the project.");
 }).pipe(Effect.provide(layer));
@@ -138,8 +141,16 @@ function send(runtime, providerThread, text, ordinal, interrupt = false) {
 
 const chat = Effect.gen(function* () {
 	const first = yield* localCommand((runtime) => Effect.gen(function* () {
+		const coordinator = yield* AcpRegistryRuntimeCoordinator;
 		const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
-		assert.equal(yield* send(runtime, thread, "t3-acp-first", 1), "completed");
+		const commands = yield* coordinator.getAvailableCommands(selection.instanceId).pipe(
+			Effect.repeat({ until: (value) => value._tag === "Some", times: 200, schedule: Schedule.spaced("25 millis") }),
+		);
+		assert.equal(commands._tag, "Some");
+		assert.deepEqual(commands.value.skills.map(({ name }) => name), ["personal-notes", "project-skills"]);
+		// ChatComposer's skill selection inserts `$${item.skill.name} `. The first
+		// real adapter turn also adds its orchestration wrapper and runtime block.
+		assert.equal(yield* send(runtime, thread, "$project-notes t3-acp-first", 1), "completed");
 		return thread;
 	}));
 	const nativeId = first.nativeThreadRef?.nativeId;
@@ -147,7 +158,7 @@ const chat = Effect.gen(function* () {
 	yield* localCommand((runtime) => Effect.gen(function* () {
 		const second = yield* runtime.resumeThread({ providerThread: first });
 		assert.equal(second.nativeThreadRef?.nativeId, nativeId);
-		assert.equal(yield* send(runtime, second, "t3-acp-second", 2), "completed");
+		assert.equal(yield* send(runtime, second, "$personal-notes t3-acp-second", 2), "completed");
 		assert.equal(yield* send(runtime, second, "slow fixture", 3, true), "interrupted");
 	}), nativeId);
 	console.log("PASS: pinned T3 Local command adapter negotiated ACP v1, prompted, cold-resumed and cancelled a turn.");

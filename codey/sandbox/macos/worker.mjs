@@ -1,6 +1,7 @@
 // Runs only after the parent has started /usr/bin/sandbox-exec.
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { discoverSkills, loadSkill } from "./acp-skills.mjs";
 import { collectSandboxReview } from "./review-git.mjs";
 import { toolDefinitions } from "./tools.mjs";
 
@@ -26,6 +27,10 @@ try {
 		console.log(JSON.stringify({ ready: true }));
 	} else if (name === "review") {
 		console.log(JSON.stringify({ patches: collectSandboxReview(process.cwd(), args.git, process.env.TMPDIR) }));
+	} else if (name === "acp-skills") {
+		console.log(JSON.stringify(discoverSkills(process.cwd(), "project")));
+	} else if (name === "acp-skill") {
+		console.log(JSON.stringify({ skill: loadSkill(process.cwd(), "project", args.name) }));
 	} else {
 		const tool = toolDefinitions(process.cwd()).find((definition) => definition.name === name);
 		if (!tool) throw new Error("Tool unavailable in the macOS sandbox.");

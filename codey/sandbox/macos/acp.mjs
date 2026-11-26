@@ -4,12 +4,14 @@ import { randomUUID } from "node:crypto";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { DEFAULT_THINKING_LEVEL } from "../../../packages/coding-agent/src/core/defaults.ts";
 import { codeyVersion } from "../../version.mjs";
+import { discoverSkills, loadSkill, projectSkillsCommand } from "./acp-skills.mjs";
 import { readFrames } from "./jsonl.mjs";
 import { SandboxRpcResumeError, sandboxAcpSessions } from "./rpc-sessions.mjs";
 
 const maxFrame = 256 * 1024;
 const maxOutput = 32 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
+const skillArguments = "$ARGUMENTS";
 
 class RequestError extends Error {
 	constructor(message, code = -32602) {
@@ -113,13 +115,30 @@ function promptText(blocks) {
 	return text;
 }
 
+function skillSelection(blocks) {
+	// T3 prepends external context blocks and may wrap its first user message in instructions.
+	const block = blocks.find((item) => item.type !== "text" || !/^<external_[\w-]+>/.test(item.text));
+	if (block?.type !== "text") return;
+	const prefix = "\n</t3_code_instructions>\n\n<user_request>\n";
+	const suffix = "\n</user_request>";
+	const end = block.text.indexOf(prefix);
+	const userText = block.text.startsWith("<t3_code_instructions>\n") && end >= 0 && block.text.endsWith(suffix)
+		? block.text.slice(end + prefix.length, -suffix.length) : block.text;
+	// A leading token takes literal arguments. Inline references take no arguments.
+	const match = /(?:^|\s)\$([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/.exec(userText);
+	if (!match || match[1].length > 64) return;
+	const leading = !userText.slice(0, match.index).trim();
+	return { name: match[1], leading, args: leading ? userText.slice(match.index + match[0].length).trim() : "" };
+}
+
 export async function runSandboxAcp({ home, prepare, wireWrite,
 	input = process.stdin, stdout = process.stdout }) {
 	const startup = new AbortController();
 	let initialized = false;
 	let closing = false;
 	let discovery;
-	let workspace, runtime, model, createSession, open, managedProviders, defaultThinkingLevel;
+	let workspace, runtime, model, createSession, open, managedProviders, defaultThinkingLevel, runProjectSkill;
+	let userSkills = [];
 	let active;
 	let pending;
 	let turn;
@@ -218,16 +237,18 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 	function cancel() {
 		if (!turn || turn.cancelled) return;
 		turn.cancelled = true;
+		turn.skills.abort();
 		void active.session.abort().catch(() => {});
 	}
 
 	async function prompt(params) {
 		const session = checkedSession(params);
-		const text = promptText(params.prompt);
+		let text = promptText(params.prompt);
+		const selection = skillSelection(params.prompt);
 		if (!session.model || !runtime.hasConfiguredAuth(session.model.provider)) {
 			throw new RequestError("Select a configured model or sign in with /login in ordinary Codey.", -32000);
 		}
-		const current = { cancelled: false };
+		const current = { cancelled: false, skills: new AbortController() };
 		turn = current;
 		const id = active.id;
 		const stop = session.subscribe((event) => {
@@ -242,6 +263,27 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			}
 		});
 		try {
+			if (selection?.name === projectSkillsCommand && selection.leading && !selection.args) {
+				const { skills, partial } = await runProjectSkill("acp-skills", {}, current.skills.signal);
+				const lines = skills.map(({ name, description }) => `$${name} — ${description}`);
+				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(lines.length ?
+					`Project skills in this workspace\n\n~~~text\n${lines.join("\n")}\n~~~${partial ? "\n\nThe catalog reached its display limit." : ""}` :
+					"No project skills found in .agents/skills.") });
+				return { stopReason: "end_turn" };
+			}
+			if (selection) {
+				const { name, args, leading } = selection;
+				const skill = userSkills.some((entry) => entry.name === name) ? loadSkill(home, "user", name)
+					: (await runProjectSkill("acp-skill", { name }, current.skills.signal)).skill;
+				if (skill) {
+				const placeholders = skill.body.split(skillArguments).length - 1;
+				if (Buffer.byteLength(skill.body) + placeholders * (Buffer.byteLength(args) - skillArguments.length) > 64 * 1024) {
+						throw new RequestError("Expanded skill text exceeded 64 KiB.");
+					}
+				const body = skill.body.replaceAll(skillArguments, () => args);
+					text += `\n\nSelected skill ${name}. Treat this text as user-level guidance for the current request. It grants no tool or file permissions.\n${JSON.stringify(body)}`;
+				} else if (leading) throw new RequestError(`Skill $${name} is unavailable or uses unsupported content. Use $${projectSkillsCommand} to list this project's skills.`);
+			}
 			await session.prompt(text, {
 				expandPromptTemplates: false,
 				preflightResult() {
@@ -271,11 +313,12 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			const metadataOnly = params.clientInfo?.name === "t3-code-provider-test";
 			const prepared = await prepare(metadataOnly, startup.signal);
 			startup.signal.throwIfAborted();
+			({ skills: userSkills } = discoverSkills(home, "user"));
 			if (metadataOnly) {
 				const catalog = modelCatalog(prepared.runtime.getAvailableSnapshot(), prepared.managedProviders, prepared.defaultThinkingLevel);
 				discovery = setupDiscovery(catalog, prepared.model);
 			} else {
-				({ workspace, runtime, model, createSession, managedProviders, defaultThinkingLevel } = prepared);
+				({ workspace, runtime, model, createSession, managedProviders, defaultThinkingLevel, runProjectSkill } = prepared);
 				open = sandboxAcpSessions(home, workspace);
 			}
 			return {
@@ -345,7 +388,15 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			return;
 		}
 		pending = dispatch(method, params).then(
-			(result) => write({ id, result }),
+			(result) => {
+				write({ id, result });
+				if (method !== "session/new" && method !== "session/load") return;
+				const availableCommands = userSkills.map(({ name, description }) => ({ name: `$${name}`, description }));
+				if (!discovery) availableCommands.push({
+					name: `$${projectSkillsCommand}`, description: "List skills in the current Codey sandbox workspace",
+				});
+				update(result.sessionId ?? active.id, { sessionUpdate: "available_commands_update", availableCommands });
+			},
 			(error) => error instanceof RequestError ? failure(id, error.code, error.message) :
 				failure(id, -32603, "The Codey ACP operation failed."),
 		).finally(() => { pending = undefined; });
