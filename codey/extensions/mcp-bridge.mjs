@@ -113,7 +113,8 @@ async function manageBridges(pi, args, ctx) {
 		if (nameInput === undefined) return;
 		const name = bridgeName(nameInput.trim());
 		function conflicts() {
-			return [...regularConfig(ctx).servers, ...pi.getMcpServers(), ...store.list().entries]
+			const direct = bridgeStore(ctx.cwd, { optional: true, direct: true })?.list().entries ?? [];
+			return [...regularConfig(ctx).servers, ...pi.getMcpServers(), ...store.list().entries, ...direct]
 				.some((entry) => bridgeNamespace(entry.name) === bridgeNamespace(name));
 		}
 		if (conflicts()) throw new Error("An MCP server or bridge already uses that name.");

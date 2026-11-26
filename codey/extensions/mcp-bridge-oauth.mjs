@@ -12,9 +12,9 @@ function httpsUrl(value) {
 	return url;
 }
 
-function scopedNetwork(resource, ca) {
-	const local = new Agent({ connect: bridgeTlsOptions(ca) });
-	const publicTrust = new Agent({ connect: bridgeTlsOptions() });
+function scopedNetwork(resource, ca, directTls) {
+	const local = new Agent({ connect: directTls ?? bridgeTlsOptions(ca) });
+	const publicTrust = new Agent({ connect: directTls ? { rejectUnauthorized: true } : bridgeTlsOptions() });
 	return {
 		async request(input, init) {
 			const url = httpsUrl(input);
@@ -46,9 +46,9 @@ function bindingFor(resource, discovery) {
 	return { issuer, browser, registration, token };
 }
 
-function preparedProvider(resource, store, redirectUrl, onRedirect = () => {}) {
+function preparedProvider(resource, store, redirectUrl, onRedirect = () => {}, direct = false) {
 	return new McpOAuthProvider({ serverUrl: resource, redirectUrl, store, onRedirect,
-		clientMetadata: { client_name: "Codey MCP bridge", token_endpoint_auth_method: "none" } });
+		clientMetadata: { client_name: direct ? "Codey MCP" : "Codey MCP bridge", token_endpoint_auth_method: "none" } });
 }
 
 function authorizeFetch(network, binding, allowed) {
@@ -61,17 +61,20 @@ function authorizeFetch(network, binding, allowed) {
 	};
 }
 
-export async function loginBridge(bridge, ui, isCurrent) {
+export async function loginBridge(bridge, ui, isCurrent, { directTls, challenge: initialChallenge } = {}) {
 	const resource = httpsUrl(bridge.url);
-	const network = scopedNetwork(resource, bridge.pem);
+	const network = scopedNetwork(resource, bridge.pem, directTls);
 	const deadline = AbortSignal.timeout(180_000);
 	async function allow(title, details) {
 		return await ui.select(`${title}\n${details}`, ["Cancel", "Allow"], { signal: deadline, blockedKind: "permission" }) === "Allow";
 	}
 	try {
-		const challengeResponse = await network.request(resource, { headers: { Accept: "application/json, text/event-stream" }, signal: deadline });
-		const challenge = challengeResponse.status === 401 ? parseWwwAuthenticate(challengeResponse.headers.get("www-authenticate")) : {};
-		await challengeResponse.body?.cancel();
+		let challenge = initialChallenge;
+		if (!challenge) {
+			const response = await network.request(resource, { headers: { Accept: "application/json, text/event-stream" }, signal: deadline });
+			challenge = response.status === 401 ? parseWwwAuthenticate(response.headers.get("www-authenticate")) : {};
+			await response.body?.cancel();
+		}
 		const metadataUrl = challenge.resourceMetadataUrl && httpsUrl(challenge.resourceMetadataUrl);
 		if (metadataUrl && metadataUrl.origin !== resource.origin &&
 			!await allow("Read protected-resource metadata from another HTTPS origin?", `${metadataUrl.origin}\nMetadata only. Codey sends no OAuth credentials.`)) return false;
@@ -119,7 +122,7 @@ export async function loginBridge(bridge, ui, isCurrent) {
 			const memory = new MemoryOAuthStateStore();
 			await memory.save({ serverUrl: resource.href, discovery });
 			let browserUrl;
-			const provider = preparedProvider(resource, memory, callback.redirectUrl, (url) => { browserUrl = url; });
+			const provider = preparedProvider(resource, memory, callback.redirectUrl, (url) => { browserUrl = url; }, Boolean(directTls));
 			const options = { serverUrl: resource, scope, fetch: authorizeFetch(network, binding, ["registration", "token"]), signal: deadline };
 			await authorizeMcp(provider, { ...options, skipRefresh: true });
 			if (!browserUrl || browserUrl.origin !== binding.browser.origin || browserUrl.pathname !== binding.browser.pathname ||
@@ -129,7 +132,8 @@ export async function loginBridge(bridge, ui, isCurrent) {
 			const response = await waitForLoopbackSignIn({ callback, authorization, signal: deadline,
 				async promptForRedirectUrl(signal) {
 					openBrowser(browserUrl.href);
-					await ui.select(`Waiting for browser approval at ${binding.browser.origin}`, ["Cancel sign-in"], { signal, blockedKind: "auth" });
+					const notice = directTls && bridge.pem ? "\nYour browser uses its own TLS trust. If it reports a certificate error, verify the certificate there before continuing." : "";
+					await ui.select(`Waiting for browser approval at ${binding.browser.origin}${notice}`, ["Cancel sign-in"], { signal, blockedKind: "auth" });
 					return undefined;
 				},
 			});
@@ -156,7 +160,7 @@ function validAccessToken(tokens) {
 	return token;
 }
 
-export function bridgeOAuthAuth(resource, ca, file, rememberToken) {
+export function bridgeOAuthAuth(resource, ca, file, rememberToken, directTls) {
 	const store = bridgeOAuthStore(file);
 	let refreshing;
 	function refresh(rejected) {
@@ -165,11 +169,11 @@ export function bridgeOAuthAuth(resource, ca, file, rememberToken) {
 			if (state?.serverUrl !== resource.href || !state.tokens?.refresh_token) throw new Error("MCP bridge sign-in required.");
 			if (state.tokens.access_token !== rejected) return;
 			const binding = bindingFor(resource, state.discovery);
-			const network = scopedNetwork(resource, ca);
+			const network = scopedNetwork(resource, ca, directTls);
 			try {
 				const memory = new MemoryOAuthStateStore();
 				await memory.save(state);
-				const provider = preparedProvider(resource, memory, "http://127.0.0.1/callback");
+				const provider = preparedProvider(resource, memory, "http://127.0.0.1/callback", undefined, Boolean(directTls));
 				const result = await authorizeMcp(provider, { serverUrl: resource, refreshOnly: true, fetch: authorizeFetch(network, binding, ["token"]) });
 				if (result !== "AUTHORIZED") throw new Error("MCP bridge sign-in required.");
 				const updated = await memory.load();

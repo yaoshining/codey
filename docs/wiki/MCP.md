@@ -4,6 +4,16 @@
 
 普通 Codey 的用户级 MCP 服务默认配置在 `~/.codey/agent/mcp.json`。项目级配置使用 `.pi/mcp.json`，受项目可信规则限制。运行 `/mcp` 查看状态、登录或重连。 [MCP CLI 帮助](../../packages/coding-agent/docs/mcp.md)
 
+## 添加直连 HTTPS 服务
+
+在普通 Codey 的 `/mcp` 菜单选择 **Add direct HTTPS server**，或输入 `/mcp add`。输入服务名和完整 HTTPS MCP 地址。证书正常受信任时直接添加，无需确认指纹。
+
+如果服务使用不受信任的自签名证书，Codey 会显示地址与 SHA-256 指纹。通过 NAS 管理后台或管理员等可信渠道取得指纹，核对完全匹配后选择 **Fingerprint matches — trust and add this service**。取消添加不会保留证书或服务。Codey 会重新验证指纹、有效期和 SAN，使用 IP 地址时证书必须包含匹配的 IP SAN。自建 CA 签发的服务请使用下文的手工 CA 配置。
+
+若服务要求身份验证，添加后会出现 **Open browser to sign in**。也可选 **Later**，之后从 `/mcp` 菜单登录，或运行 `/mcp direct login <名称>`。向导的 OAuth 登录支持动态客户端注册。需要固定客户端或特殊 OAuth 设置的服务可继续使用手工配置。Codey 的信任只适用于保存的 MCP 地址和此服务的同源 OAuth 请求。跨源 OAuth 有独立的确认和 TLS 校验。浏览器使用自己的信任设置，若提示证书错误，应在浏览器外核对并按管理员指引处理后再继续。
+
+向导添加的服务保存在 `~/.codey/agent/mcp-direct`。证书更换需要重新核对。运行 `/mcp direct remove <名称>` 删除旧条目和该服务的本地授权，再用向导添加。此流程不会更改钥匙串或现有手工 MCP 配置。
+
 ## 通过本地 Node 桥接单个服务
 
 普通 Codey 默认使用 Streamable HTTP 直连和 Node 的正常 TLS 验证，无需单独提供证书。需要本地 Node 子进程时，在项目目录启动普通 `codey`，输入 `/mcp bridge`，选择 `Add Node bridge`。也可以直接输入 `/mcp bridge add`。
