@@ -1,0 +1,41 @@
+name: Verify Codey ACP settings discovery on macOS
+on:
+  push:
+    branches: [verify/codey-acp-settings-probe]
+    paths: [.github/workflows/codey-acp-settings-probe.yml]
+permissions:
+  contents: read
+jobs:
+  acp:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: db4c857486ea1cf44dbe86fd3b407be9a6b4633e
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Verify Codey revision and perform fixed install in a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = db4c857486ea1cf44dbe86fd3b407be9a6b4633e
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh db4c857486ea1cf44dbe86fd3b407be9a6b4633e
+          git -C "$RUNNER_TEMP/codey-installed/db4c857486ea1cf44dbe86fd3b407be9a6b4633e" rev-parse HEAD
+      - name: Prepare pinned real T3 Local command adapter
+        run: |
+          git init --quiet "$RUNNER_TEMP/t3"
+          git -C "$RUNNER_TEMP/t3" fetch --quiet --depth 1 https://github.com/yaoshining/t3code.git a22a4f9bba5d3e93ef673014549f83fd915f9677
+          git -C "$RUNNER_TEMP/t3" checkout --quiet --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/t3" rev-parse HEAD
+          test "$(git -C "$RUNNER_TEMP/t3" rev-parse HEAD)" = a22a4f9bba5d3e93ef673014549f83fd915f9677
+          (cd "$RUNNER_TEMP/t3" && CI=true npx --yes --package=pnpm@12.14.0 pnpm --filter @t3tools/provider-acp-registry... --filter @t3tools/provider-testing... install --frozen-lockfile --ignore-scripts)
+          cp codey/sandbox/macos/t3-acp.integration.mjs "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-acp-fixture.mjs"
+      - name: Test installed Codey ACP and actual T3 Local command adapter
+        run: python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey" "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-acp-fixture.mjs"
+      - name: Regress existing Pi RPC and Seatbelt
+        run: python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
