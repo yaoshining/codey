@@ -3,6 +3,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { THINKING_LEVEL_OPTIONS } from "../../../packages/coding-agent/src/core/defaults.ts";
 import { toJsonEvent } from "../../../packages/coding-agent/src/modes/json-event.ts";
 import { serializeJsonLine } from "../../../packages/coding-agent/src/modes/rpc/jsonl.ts";
+import { readFrames } from "./jsonl.mjs";
 import { SandboxRpcResumeError, sandboxRpcSessions } from "./rpc-sessions.mjs";
 
 const maxRequest = 256 * 1024;
@@ -197,7 +198,7 @@ export async function runSandboxRpc({ workspace, home, runtime, launchPath, ephe
 	try {
 		await replace(launchPath, model);
 		try {
-			await readFrames(process.stdin, onFrame, () => fail(undefined, "parse", "RPC frame exceeded 256 KiB."));
+			await readFrames(process.stdin, maxRequest, onFrame, () => fail(undefined, "parse", "RPC frame exceeded 256 KiB."));
 		} catch (error) {
 			if (!closing) throw error;
 		}
@@ -229,27 +230,4 @@ function stringField(value, field, limit = 512) {
 		throw new Error(`Invalid RPC ${field}.`);
 	}
 	return value;
-}
-
-async function readFrames(input, onFrame, tooLarge) {
-	let parts = [], size = 0;
-	for await (const chunk of input) {
-		let offset = 0;
-		while (offset < chunk.length) {
-			const newline = chunk.indexOf(10, offset);
-			const end = newline < 0 ? chunk.length : newline;
-			if (size <= maxRequest) {
-				size += end - offset;
-				if (size > maxRequest) {
-					parts = [];
-					tooLarge();
-				} else if (end !== offset) parts.push(chunk.subarray(offset, end));
-			}
-			if (newline < 0) break;
-			if (size && size <= maxRequest) onFrame(Buffer.concat(parts, size));
-			parts = [];
-			size = 0;
-			offset = newline + 1;
-		}
-	}
 }

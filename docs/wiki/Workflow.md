@@ -35,3 +35,11 @@ codey worktree delete <id>
 如果旧聊天显示 `Starting Pi` 后报 `Pi transport closed during status reset`，请查看 T3 服务日志中在它之前的 `switch_session` 错误，再确认该聊天是否由沙箱在当前工作目录创建。模式或目录不匹配时，可在沙箱里新建空白聊天，把原聊天留在原来的模式和目录。
 
 沙箱支持模型选择、文本对话、流式响应、取消和同工作区恢复。T3 的审批交互、浏览器、附件、服务档位、扩展和跨工作区恢复目前不可用。[沙箱 RPC 边界](Sandbox.md#macos-沙箱-rpc-与-t3)
+
+### T3 的 ACP Local command
+
+在运行 T3 服务的 Mac 上，添加 **ACP Provider → Local command**。在 **Executable** 填 `codey` 的绝对路径，例如 `/Users/yourname/.local/bin/codey`。在 **Arguments** 中分两行填 `acp` 和 `--sandbox=workspace-write`。先在普通 Codey 用 `/login` 配好模型，再回 T3 新建一条使用此 ACP provider 的空白聊天。T3 服务的 PATH 需要包含 Node.js。
+
+Codey 通过 stdio 协商 ACP v1，支持文本流、模型和推理档位、停止对话以及在同一工作目录恢复。ACP 会话与 Pi RPC 和普通 Codey 会话分开保存。使用相同的 provider 和工作目录重新打开已建立的 ACP 聊天即可续接。
+
+ACP 接入**不会让模型读到 T3 跨线程引用的正文**。引用以客户端实际传入的文字或 URI 为准，Codey 不打开链接，也不接入 T3 附带的 MCP。若需要本轮模型查看另一条聊天的内容，可把你允许分享的摘录直接贴进当前聊天。后续读取工具需要验证 T3 能否把授权绑定到本轮由用户选中的那一条引用，并限制可返回的数据范围。

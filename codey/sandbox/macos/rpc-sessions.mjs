@@ -1,4 +1,4 @@
-// Keep native RPC conversations in a host-owned directory scoped to one workspace.
+// Keep native conversations in a host-owned directory scoped to one workspace.
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
@@ -13,20 +13,28 @@ export class SandboxRpcResumeError extends Error {}
 
 const newThread = "Start a new, empty T3 chat with the sandbox enabled.";
 
-export function sandboxRpcSessions(home, workspace, ephemeral) {
+export const sandboxRpcSessions = (home, workspace, ephemeral) => sandboxSessions(home, workspace, ephemeral, false);
+export const sandboxAcpSessions = (home, workspace) => sandboxSessions(home, workspace, false, true);
+
+function sandboxSessions(home, workspace, ephemeral, acp) {
+	const guidance = acp ? "Start a new Codey ACP chat in this workspace." : newThread;
 	if (ephemeral) return (path) => {
 		if (path !== undefined) throw new SandboxRpcResumeError(`Ephemeral sandbox sessions cannot be reopened. ${newThread}`);
 		return { manager: SessionManager.inMemory(workspace), release() {} };
 	};
 	const codey = join(home, ".codey");
 	const agent = join(codey, "agent");
-	const store = join(agent, "sandbox-rpc");
+	const store = join(agent, acp ? "sandbox-acp" : "sandbox-rpc");
 	const directory = join(store, createHash("sha256").update(workspace).digest("hex"));
 	if (contains(workspace, store) || contains(store, workspace)) throw new Error("Choose a workspace outside the sandbox session store.");
 	process.umask(0o077);
 	return (path) => {
 		let match;
 		if (path !== undefined) {
+			if (acp) {
+				if (!sessionName.test(path)) throw new SandboxRpcResumeError(guidance);
+				path = join(directory, path);
+			}
 			match = sessionName.exec(basename(path));
 			if (!isAbsolute(path) || dirname(path) !== directory || !match) {
 				throw new SandboxRpcResumeError(
@@ -65,7 +73,7 @@ export function sandboxRpcSessions(home, workspace, ephemeral) {
 				fd = openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 			} catch (error) {
 				if (error.code === "ENOENT") {
-					throw new SandboxRpcResumeError(`The saved sandbox chat file is missing. ${newThread}`);
+					throw new SandboxRpcResumeError(`The saved sandbox chat file is missing. ${guidance}`);
 				}
 				throw error;
 			}
