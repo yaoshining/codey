@@ -1,0 +1,41 @@
+name: Verify Codey direct LAN HTTP MCP
+on:
+  push:
+    branches: [verify/codey-mcp-lan-http]
+    paths: [.github/workflows/codey-mcp-lan-http.yml]
+permissions:
+  contents: read
+jobs:
+  mcp:
+    runs-on: xcode-27
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 092eb1e518a4c38bd190d172c796dcfdf388b697
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26
+      - name: Verify candidate checkout and prepare fixtures
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 092eb1e518a4c38bd190d172c796dcfdf388b697
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+      - name: Direct LAN HTTP MCP terminal and RPC isolation
+        run: '"$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-plain-http.integration.py ./codey/bin/codey'
+      - name: HTTPS direct, bridge and OAuth regressions
+        run: |
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-direct.integration.py ./codey/bin/codey
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge.integration.py ./codey/bin/codey
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge-oauth.integration.py ./codey/bin/codey
+      - name: Shared provider LAN transport regression
+        run: |
+          node --import ./packages/coding-agent/src/experimental/source-resolver.ts --test codey/test/provider-endpoint.test.mjs codey/test/mcp-ca.test.mjs codey/test/mcp-oauth.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/provider-lan.integration.py ./codey/bin/codey
