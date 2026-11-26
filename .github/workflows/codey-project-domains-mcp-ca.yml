@@ -1,9 +1,9 @@
-name: Verify Codey Seatbelt one-time HTTPS approval
+name: Verify Codey workspace domains and MCP TLS
 
 on:
   push:
-    branches: [verify/codey-macos-network-approval]
-    paths: [.github/workflows/codey-network-approval.yml]
+    branches: [verify/codey-project-domains-mcp-ca]
+    paths: [.github/workflows/codey-project-domains-mcp-ca.yml]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 14a5f3fb29850bfc38b03839fd2a7799772a6cfa
+          ref: b5d67f8f7d411d109917e0fa7613fba2accb30f5
           persist-credentials: false
       - name: Select official Node 24
         if: ${{ !matrix.brew }}
@@ -60,5 +60,5 @@ jobs:
       - name: Run the public terminal with a synthetic worktree and fake model
         shell: bash
         run: |
-          node --test codey/test/macos-sandbox.test.mjs codey/test/macos-host-model.test.mjs
+          node --test codey/test/macos-sandbox.test.mjs codey/test/macos-host-model.test.mjs codey/test/mcp-ca.test.mjs codey/test/mcp-oauth.test.mjs
           "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/integration.py ./codey/bin/codey
