@@ -60,3 +60,7 @@ codey sandbox --commit HEAD --image "$image"
 ```
 
 `--dry-run` 只打印计划。实际运行复制所选提交，排除暂存、未暂存、未跟踪和忽略文件。容器 Home 是临时的，项目结果保留在输出所示的 `~/.codey/sandboxes/task-*/project`。检查后自行选取改动，原仓库没有自动写回。启动要求兼容的本机 Linux Docker，失败不会转为宿主运行。快照没有 Git 仓库，不能用 `/review`。 [镜像构建与隔离指南](../../codey/sandbox/README.md)
+
+### macOS 沙箱 ACP
+
+运行 `codey acp --sandbox=workspace-write` 可由 ACP 客户端通过 stdio 启动 Codey。该入口只支持 macOS Seatbelt。工具在启动时确定的单个工作目录内运行，工具网络始终关闭。工具权限由 Seatbelt 固定，ACP 不接入 T3 的逐次审批、MCP、文件系统或终端回调。附件、嵌入资源、额外工作目录和项目扩展不受支持。登录需在普通终端启动 `codey` 后输入 `/login`。T3 配置见 [ACP Local command](Workflow.md#t3-的-acp-local-command)。

@@ -13,6 +13,7 @@ import { SettingsManager } from "../../../packages/coding-agent/src/core/setting
 import { takeOverStdout } from "../../../packages/coding-agent/src/core/output-guard.ts";
 import { styleInfo, styleReviewMarker } from "../../branding.mjs";
 import { reviewSystemPrompt } from "../../extensions/review.mjs";
+import { runSandboxAcp } from "./acp.mjs";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
 import { projectDomains } from "./project-domains.mjs";
@@ -78,6 +79,7 @@ function emptyResources() {
 }
 
 async function launch() {
+	const acp = process.env.CODEY_ACP_ENTRY === "1";
 	const { values } = parseArgs({
 		options: {
 			sandbox: { type: "string" },
@@ -98,6 +100,14 @@ async function launch() {
 			help: { type: "boolean", short: "h" },
 		},
 	});
+	if (acp) {
+		const acpHelp = "Usage: codey acp --sandbox=workspace-write [--workspace <directory>] [--provider <name> --model <id>]";
+		if (values.help) return console.log(acpHelp);
+		if (values.sandbox !== "workspace-write") throw new Error(acpHelp);
+		if (Object.keys(values).some((key) => !["sandbox", "workspace", "provider", "model"].includes(key))) {
+			throw new Error("Unsupported option for Codey ACP.");
+		}
+	}
 	if (values.sandbox !== "workspace-write") throw new Error(help);
 	if (values.help) return console.log(help);
 	const rpc = values.mode === "rpc";
@@ -109,8 +119,8 @@ async function launch() {
 		values.extension.length !== 1 || basename(values.extension[0]) !== "pi-t3-mcp-extension.ts")) {
 		throw new Error("Extensions are unavailable in the macOS sandbox.");
 	}
-	const wireWrite = rpc ? process.stdout.write.bind(process.stdout) : undefined;
-	if (rpc) takeOverStdout();
+	const wireWrite = rpc || acp ? process.stdout.write.bind(process.stdout) : undefined;
+	if (rpc || acp) takeOverStdout();
 	const management = [values["list-domains"], values["allow-domain"], values["remove-domain"]]
 		.filter((value) => value !== undefined).length;
 	if (management > 1 || (management && (rpc || values.provider !== undefined || values.model !== undefined))) {
@@ -131,7 +141,7 @@ async function launch() {
 		return;
 	}
 	if (process.platform !== "darwin") throw new Error("workspace-write requires macOS Seatbelt. No tool was run.");
-	if (!rpc && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("An interactive Codey terminal is required. Use --mode rpc for JSONL.");
+	if (!rpc && !acp && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("An interactive Codey terminal is required. Use --mode rpc for JSONL.");
 	if (Boolean(values.provider) !== Boolean(values.model)) throw new Error("Specify --provider and --model together.");
 
 	const workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
@@ -142,7 +152,7 @@ async function launch() {
 	let input;
 	let initial;
 	const startup = new AbortController();
-	const startupSignals = rpc ? ["SIGTERM", "SIGINT", "SIGHUP"] : [];
+	const startupSignals = rpc || acp ? ["SIGTERM", "SIGINT", "SIGHUP"] : [];
 	const cancelStartup = () => startup.abort();
 	const finishedStartup = () => {
 		for (const signal of startupSignals) process.off(signal, cancelStartup);
@@ -172,7 +182,7 @@ async function launch() {
 		const newSession = (cwd, sandbox, sessionManager, currentModel, extras = []) => {
 			const settingsManager = SettingsManager.inMemory({
 				defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true,
-				...(rpc ? { compaction: { enabled: false }, retry: { enabled: false } } : {}),
+				...((rpc || acp) ? { compaction: { enabled: false }, retry: { enabled: false } } : {}),
 			});
 			const customTools = values["no-tools"] ? [] : toolDefinitions(cwd).map((definition) => ({
 				...definition,
@@ -188,6 +198,14 @@ async function launch() {
 				tools: customTools.map(({ name }) => name), customTools,
 			});
 		};
+		if (acp) {
+			startup.signal.throwIfAborted();
+			finishedStartup();
+			return await runSandboxAcp({
+				workspace, home, runtime, model, wireWrite,
+				createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel),
+			});
+		}
 		if (rpc) {
 			startup.signal.throwIfAborted();
 			finishedStartup();

@@ -22,6 +22,13 @@ if [[ "${1:-}" == sandbox ]]; then
 fi
 
 HAS_MACOS_SANDBOX=
+unset CODEY_ACP_ENTRY
+if [[ "${1:-}" == acp ]]; then
+  shift
+  unset T3_ACP_MCP_ENDPOINT T3_ACP_MCP_AUTHORIZATION T3_ACP_MCP_NODE T3_ACP_MCP_ENTRYPOINT T3_ACP_MCP_CALL
+  export CODEY_ACP_ENTRY=1
+  HAS_MACOS_SANDBOX=1
+fi
 for ARG in "$@"; do
   case "$ARG" in
     --) break ;;
