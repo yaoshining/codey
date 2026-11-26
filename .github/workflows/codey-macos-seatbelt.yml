@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: b2f6d6c60722eb8d346070e365f0be5bad92371b
+          ref: 68a7e56b8e2ff290fc52172939ae49951052f5e2
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -49,15 +49,21 @@ jobs:
           test_dir="$(mktemp -d)"
           node_path="$(node -p 'process.execPath')"
           test_dir="$(cd "$test_dir" && pwd -P)"
-          for kind in sh node; do
+          probe_profile="$test_dir/probe.sbpl"
+          cp "$PWD/codey/sandbox/macos/profile.sbpl" "$probe_profile"
+          printf '%s\n' '(allow file-read-metadata (subpath "/System") (subpath "/private/preboot"))' '(allow file-read-data (literal "/System/Volumes") (literal "/private/var") (literal "/private/var/db") (literal "/Library") (literal "/Library/Apple"))' >> "$probe_profile"
+          for kind in sh node system-metadata; do
             if [[ "$kind" == sh ]]; then
               probe=(/bin/sh -c 'printf "shell starts\\n"')
             else
               probe=("$node_path" --jitless -e 'console.log("node starts")')
             fi
+            profile="$PWD/codey/sandbox/macos/profile.sbpl"
+            if [[ "$kind" == system-metadata ]]; then profile="$probe_profile"; fi
             cache="$(node -e 'const f=require("fs"); for(const d of ["/System/Cryptexes/OS","/System/Volumes/Preboot/Cryptexes/OS","/private/preboot/Cryptexes/OS"]) {try {const p=f.realpathSync(d+"/System/Library/dyld");if(p.startsWith("/System/Volumes/Preboot/")||p.startsWith("/private/preboot/")){console.log(p);process.exit()}}catch{}} console.log("/System/Library/dyld")')"
+            echo "System cache path: $cache"
             if /usr/bin/env -i PATH=/usr/bin:/bin HOME="$test_dir" TMPDIR="$test_dir" /usr/bin/sandbox-exec \
-              -f "$PWD/codey/sandbox/macos/profile.sbpl" -D "WORKSPACE=$test_dir" -D "SCRATCH=$test_dir" \
+              -f "$profile" -D "WORKSPACE=$test_dir" -D "SCRATCH=$test_dir" \
               -D "INSTALL=$PWD" -D "NODE=$node_path" -D "TOOLCHAIN=/dev/null" -D "TOOLCHAIN_LINKS=/dev/null" -D "DYLD_CACHE=$cache" "${probe[@]}"; then
               echo "Probe passed: $kind"
             else
