@@ -20,7 +20,7 @@ class FakeModel(BaseHTTPRequestHandler):
     approved_reads = []
 
     def do_GET(self):
-        if self.path in ("/approved", "/denied", "/timeout"):
+        if self.path in ("/approved", "/denied", "/timeout", "/granted", "/revoked", "/isolated", "/subdomain"):
             self.approved_reads.append(self.path)
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -37,16 +37,18 @@ class FakeModel(BaseHTTPRequestHandler):
         latest_user = max(i for i, m in enumerate(body["messages"]) if m["role"] == "user")
         latest_tools = [m for m in body["messages"][latest_user:] if m["role"] == "tool"]
         prompt = str(body["messages"][latest_user]["content"])
-        read_path = next((path for path in ["approved", "denied", "timeout"] if f"request {path} read" in prompt), None)
+        paths = ["approved", "denied", "timeout", "granted", "revoked", "isolated", "subdomain"]
+        read_path = next((path for path in paths if f"request {path} read" in prompt), None)
         if read_path and not latest_tools:
             delta = {"role": "assistant", "tool_calls": [{
                 "index": 0, "type": "function", "id": f"fixture_{read_path}",
-                "function": {"name": "https_read", "arguments": json.dumps({"url": f"https://codey-approval.example/{read_path}"})},
+                "function": {"name": "https_read", "arguments": json.dumps({
+                    "url": f"https://{'sub.' if read_path == 'subdomain' else ''}codey-approval.example/{read_path}"})},
             }]}
             finish = "tool_calls"
         elif read_path:
             content = str(latest_tools[-1]["content"])
-            expected = "CONTROLLED_HTTPS_RESPONSE" if read_path == "approved" else "HTTPS read was not approved."
+            expected = "CONTROLLED_HTTPS_RESPONSE" if read_path in ("approved", "granted") else "HTTPS read was not approved."
             delta = {"role": "assistant", "content": "APPROVAL_FLOW_FINISHED" if expected in content else "UNEXPECTED_TOOL_RESULT"}
             finish = "stop"
         elif not latest_tools:
@@ -231,6 +233,10 @@ def main():
         wrapper.chmod(0o700)
         approval_env = {**env, "PATH": f"{wrapper_dir}:{env['PATH']}",
                         "CODEY_FIXTURE_PORT": str(tls_server.server_port), "CODEY_FIXTURE_CERT": str(cert)}
+        def domains(*flags, cwd=linked):
+            return subprocess.check_output([str(binary), *builtin_args, *flags], cwd=cwd, env=env, text=True)
+
+        assert "No HTTPS domains" in domains("--list-domains")
         with pexpect.spawn(str(binary), args, cwd=linked, env=approval_env, encoding="utf-8", timeout=45) as terminal:
             terminal.expect_exact("codey-sandbox> ")
             for path in ["denied", "approved", "timeout"]:
@@ -247,12 +253,45 @@ def main():
                     terminal.send("\r")
                 terminal.expect_exact("APPROVAL_FLOW_FINISHED")
                 terminal.expect_exact("codey-sandbox> ")
+            domains("--allow-domain", "codey-approval.example")
+            assert "codey-approval.example" == domains("--list-domains").strip()
+            assert "No HTTPS domains" in domains("--list-domains", cwd=source)
+            terminal.send("request granted read\r")
+            terminal.expect_exact("APPROVAL_FLOW_FINISHED")
+            assert "Network approval requested" not in terminal.before
+            terminal.expect_exact("codey-sandbox> ")
+            terminal.send("request subdomain read\r")
+            terminal.expect_exact("Destination: sub.codey-approval.example:443")
+            terminal.expect_exact("or press Enter to deny:")
+            terminal.send("\r")
+            terminal.expect_exact("APPROVAL_FLOW_FINISHED")
+            terminal.expect_exact("codey-sandbox> ")
+            domains("--remove-domain", "codey-approval.example")
+            terminal.send("request revoked read\r")
+            terminal.expect_exact("Operation: HTTPS GET https://codey-approval.example/revoked")
+            terminal.expect_exact("or press Enter to deny:")
+            terminal.send("\r")
+            terminal.expect_exact("APPROVAL_FLOW_FINISHED")
+            terminal.expect_exact("codey-sandbox> ")
             terminal.send("/quit\r")
             terminal.expect(pexpect.EOF)
             terminal.close()
             assert terminal.exitstatus == 0
-        assert FakeModel.approved_reads == ["/approved"]
+        assert FakeModel.approved_reads == ["/approved", "/granted"]
+        domains("--allow-domain", "codey-approval.example")
+        with pexpect.spawn(str(binary), args, cwd=source, env=approval_env, encoding="utf-8", timeout=45) as terminal:
+            terminal.expect_exact("codey-sandbox> ")
+            terminal.send("request isolated read\r")
+            terminal.expect_exact("Operation: HTTPS GET https://codey-approval.example/isolated")
+            terminal.expect_exact("or press Enter to deny:")
+            terminal.send("\r")
+            terminal.expect_exact("APPROVAL_FLOW_FINISHED")
+            terminal.expect_exact("codey-sandbox> ")
+            terminal.send("/quit\r")
+            terminal.expect(pexpect.EOF)
+        assert FakeModel.approved_reads == ["/approved", "/granted"]
         print("PASS: fake model requested approval, only the approved call reached the controlled service, and the turn continued.", flush=True)
+        print("PASS: exact domain applied to the canonical workspace, excluded subdomains and other workspaces, and revocation restored the prompt.", flush=True)
         tls_server.shutdown()
         server.shutdown()
 
