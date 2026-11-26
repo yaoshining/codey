@@ -3,6 +3,7 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, rea
 import { join } from "node:path";
 import { AuthStorage, FileAuthStorageBackend } from "../../../packages/coding-agent/src/core/auth-storage.ts";
 import { ModelRuntime } from "../../../packages/coding-agent/src/core/model-runtime.ts";
+import { InMemoryCodingAgentModelsStore } from "../../../packages/coding-agent/src/core/models-store.ts";
 import { contains } from "./seatbelt.mjs";
 
 export function parseData(raw, label) {
@@ -41,6 +42,20 @@ function readOptional(path) {
 	}
 }
 
+async function loadModelCache(agentDir) {
+	const modelsStore = new InMemoryCodingAgentModelsStore();
+	try {
+		const cache = parseData(readOptional(join(agentDir, "models-store.json")), "models-store.json");
+		for (const [provider, entry] of Object.entries(cache)) {
+			if (Array.isArray(entry?.models)) await modelsStore.write(provider, entry);
+		}
+	} catch {
+		// An unreadable optional cache must not prevent use of the installed catalog.
+		return { modelsStore, warning: "Could not read the local model cache. Using the installed model catalog." };
+	}
+	return { modelsStore };
+}
+
 export async function hostModel(home, workspace, hostDir) {
 	const codey = join(home, ".codey");
 	const agentDir = join(codey, "agent");
@@ -69,6 +84,9 @@ export async function hostModel(home, workspace, hostDir) {
 		writeFileSync(modelsPath, JSON.stringify(models), { flag: "wx", mode: 0o600 });
 	}
 	const settings = parseData(readOptional(join(agentDir, "settings.json")), "settings.json");
-	const runtime = await ModelRuntime.create({ credentials, modelsPath, allowModelNetwork: false, refreshOnCreate: false });
-	return { runtime, agentDir, settings };
+	const { modelsStore, warning } = await loadModelCache(agentDir);
+	// The local refresh restores cached catalogs and populates the auth/availability
+	// snapshot consumed by the SDK's initial model selection.
+	const runtime = await ModelRuntime.create({ credentials, modelsPath, modelsStore, allowModelNetwork: false });
+	return { runtime, agentDir, settings, warning };
 }
