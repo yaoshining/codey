@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs, stripVTControlCharacters } from "node:util";
 import { createExtensionRuntime } from "../../../packages/coding-agent/src/core/extensions/loader.ts";
+import { findInitialModel } from "../../../packages/coding-agent/src/core/model-resolver.ts";
 import { createAgentSession } from "../../../packages/coding-agent/src/core/sdk.ts";
 import { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
@@ -67,12 +68,18 @@ async function terminal() {
 		const host = await hostModel(home, workspace, sandbox.hostDir);
 		runtime = host.runtime;
 		if (host.warning) console.error(host.warning);
-		const model = values.provider && runtime.getModel(values.provider, values.model);
+		let model = values.provider && runtime.getModel(values.provider, values.model);
 		if (values.provider && !model) throw new Error("The selected provider/model is unavailable.");
 		if (model && !runtime.hasConfiguredAuth(model.provider)) {
 			throw new Error(`Authentication is unavailable for "${model.provider}". ${loginGuidance}`);
 		}
 		const { defaultProvider, defaultModel, defaultThinkingLevel } = host.settings;
+		if (!model) {
+			const selection = await findInitialModel({
+				scopedModels: [], isContinuing: false, defaultProvider, defaultModelId: defaultModel, modelRuntime: runtime,
+			});
+			model = selection.model;
+		}
 		const settings = SettingsManager.inMemory({ defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true });
 		const customTools = toolDefinitions(workspace).map((definition) => ({
 			...definition,
@@ -87,7 +94,8 @@ async function terminal() {
 			tools: customTools.map(({ name }) => name), customTools,
 		});
 		session = result.session;
-		await readCommands(workspace, session, sandbox);
+		// The SDK's Agent can expose a placeholder even when model selection returned nothing.
+		await readCommands(workspace, session, sandbox, model);
 	} finally {
 		session?.dispose();
 		try {
@@ -98,9 +106,9 @@ async function terminal() {
 	}
 }
 
-async function readCommands(workspace, session, sandbox) {
+async function readCommands(workspace, session, sandbox, model) {
 	console.log(`Codey macOS sandbox (workspace-write): ${display(workspace)}`);
-	if (session.model) console.log(`Model: ${display(session.model.provider)}/${display(session.model.id)}`);
+	if (model) console.log(`Model: ${display(model.provider)}/${display(model.id)}`);
 	else console.error(noModel);
 	console.log("Tools are offline. Model requests use the host. Type /help or /quit.");
 	const input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
@@ -142,12 +150,12 @@ async function readCommands(workspace, session, sandbox) {
 						session.recordBashResult(command, { output, exitCode: result.exitCode ?? 0, cancelled: false, truncated: false }, { excludeFromContext });
 					}
 				} else if (text) {
-					if (session.model) await session.prompt(text, { expandPromptTemplates: false });
+					if (model) await session.prompt(text, { expandPromptTemplates: false });
 					else console.error(noModel);
 				}
 			} catch (error) {
-				if (/^(Authentication failed for |No API key found for )/.test(error.message) && session.model) {
-					console.error(`Authentication is unavailable for "${display(session.model.provider)}". ${loginGuidance}`);
+				if (/^(Authentication failed for |No API key found for )/.test(error.message) && model) {
+					console.error(`Authentication is unavailable for "${display(model.provider)}". ${loginGuidance}`);
 				} else console.error(display(error.message));
 			} finally {
 				active = undefined;

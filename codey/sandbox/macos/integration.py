@@ -158,8 +158,8 @@ def main():
         builtin_env = {key: value for key, value in env.items() if key != "OPENAI_API_KEY"}
         guidance = "Exit with /quit, run regular codey and use /login there, then reopen this sandbox."
         with pexpect.spawn(str(binary), builtin_args, cwd=linked, env=builtin_env, encoding="utf-8", timeout=30) as terminal:
-            terminal.expect_exact(f"No models available. {guidance}")
             terminal.expect_exact("codey-sandbox> ")
+            assert f"No models available. {guidance}" in terminal.before, terminal.before
             for text in ["/login", "A prompt without a model"]:
                 terminal.send(text + "\r")
                 terminal.expect_exact(guidance)
@@ -177,8 +177,8 @@ def main():
             (agent / "auth.json").write_text(json.dumps({provider: credential}))
             (agent / "settings.json").write_text(json.dumps({"defaultProvider": provider, "defaultModel": "gpt-6-luna"}))
             with pexpect.spawn(str(binary), builtin_args, cwd=linked, env=builtin_env, encoding="utf-8", timeout=30) as terminal:
-                terminal.expect_exact(f"Model: {provider}/gpt-6-luna")
                 terminal.expect_exact("codey-sandbox> ")
+                assert f"Model: {provider}/gpt-6-luna" in terminal.before, terminal.before
                 terminal.send("/quit\r")
                 terminal.expect(pexpect.EOF)
                 terminal.close()
