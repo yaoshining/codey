@@ -10,6 +10,8 @@ Codey is a fork of [Pi](https://github.com/earendil-works/pi) for working on cod
 
 This repository is in early development. Its independent `codey` launcher runs this checkout's Pi CLI and defaults to `~/.codey/agent` for user settings and sessions. Root and authentication help display Codey; the internal runtime, interactive interface and OAuth identity remain Pi. Existing `pi` commands and project `.pi` directories retain their behavior. Existing user data is not automatically imported.
 
+**[Codey 中文使用手册](docs/wiki/README.md)** covers installation, providers, MCP, code review, worktrees, T3 and sandboxes.
+
 ## Install Codey
 
 On macOS or Linux, install a reviewed commit using the [Codey installer](codey/README.md). It requires Git, npm and Node.js 22.19 or newer, installs into your home directory without sudo, and adds `codey` to your shell's PATH. It does not install anything globally through npm. The upstream Pi installer does not install Codey.
