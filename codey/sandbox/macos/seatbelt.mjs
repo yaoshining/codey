@@ -61,6 +61,7 @@ export async function openSeatbelt(workspace, hostHome) {
 		}
 	}
 
+	const dyldCache = systemDyldCache();
 	const hostDir = mkdtempSync("/private/tmp/codey-sandbox-host-");
 	const scratch = mkdtempSync("/private/tmp/codey-sandbox-worker-");
 	const close = () => {
@@ -72,7 +73,7 @@ export async function openSeatbelt(workspace, hostHome) {
 		WORKSPACE: workspace, SCRATCH: scratch, INSTALL: install, NODE: node,
 		TOOLCHAIN: brew ? `${brew}/Cellar` : "/dev/null",
 		TOOLCHAIN_LINKS: brew ? `${brew}/opt` : "/dev/null",
-		DYLD_CACHE: systemDyldCache(),
+		DYLD_CACHE: dyldCache,
 	};
 	const env = { HOME: join(scratch, "home"), TMPDIR: scratch, PATH: "/usr/bin:/bin", LANG: "C", TERM: "dumb" };
 	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, name, args, signal });

@@ -14,6 +14,10 @@
   (sysctl-name-prefix "kern.proc.pid.")
   (sysctl-name "kern.maxfilesperproc"))
 (allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
+; System runtime probes on macOS. These are not user IPC or filesystem grants.
+(allow system-mac-syscall (mac-policy-name "vnguard"))
+(allow system-mac-syscall
+  (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))
 (allow file-read-metadata
   (path-ancestors (param "WORKSPACE"))
   (path-ancestors (param "SCRATCH"))
@@ -27,6 +31,8 @@
   (literal "/dev/fd"))
 (allow file-read* file-map-executable
   (subpath "/System/Library")
+  (subpath "/Library/Apple/System/Library")
+  (subpath "/Library/Apple/usr/lib")
   ; macOS can locate the signed dyld shared cache on the OS Cryptex.
   (subpath "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld")
   (subpath "/private/preboot/Cryptexes/OS/System/Library/dyld")
@@ -40,9 +46,13 @@
   (subpath (param "TOOLCHAIN"))
   (subpath (param "TOOLCHAIN_LINKS")))
 (allow file-read*
+  (literal "/")
+  (literal "/System")
+  (literal "/System/Volumes/Preboot")
   (literal "/System/Volumes/Preboot/Cryptexes")
   (literal "/System/Volumes/Preboot/Cryptexes/OS")
   (literal "/private/preboot/Cryptexes")
+  (literal "/private/preboot")
   (literal "/private/preboot/Cryptexes/OS")
   (literal "/System/Cryptexes")
   (literal "/System/Cryptexes/OS"))
