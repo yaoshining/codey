@@ -93,8 +93,17 @@ def run(binary, t3_fixture=None):
                                       "reasoningLevels": {"openai/fixture-one": alias_levels[1:]}}))
         profile.chmod(0o600)
         write_skill(agent / "skills", "personal-notes", "Personal fixture", "PERSONAL_SKILL_BODY $ARGUMENTS")
+        standard = home / ".agents/skills"
+        write_skill(standard, "standard-notes", "Standard personal fixture", "STANDARD_SKILL_BODY $ARGUMENTS")
+        write_skill(standard, "personal-notes", "Duplicate personal fixture", "STANDARD_SHADOW_SKILL_BODY")
+        write_skill(standard, "writable-notes", "Group-writable fixture", "UNTRUSTED_BODY").chmod(0o664)
+        external = write_skill(home / ".local/share/fixtures", "ego-browser", "External fixture", "EXTERNAL_SKILL_BODY")
+        (standard / "ego-browser").symlink_to(external.parent, target_is_directory=True)
         project = workspace / ".agents/skills"
         write_skill(project, "project-notes", "Project fixture", "PROJECT_SKILL_BODY $ARGUMENTS")
+        write_skill(project, "openspec-verify-change", ">-\n  Verify implementation against a change artifact.\n  Report issues with file locations.", "OPENSPEC_SKILL_BODY $ARGUMENTS")
+        for i in range(12):
+            write_skill(project, f"related-skill-{i}", "Another project fixture", "Unused fixture body")
         write_skill(project, "personal-notes", "Project duplicate", "SHADOW_SKILL_BODY")
         write_skill(project, "dynamic-notes", "Dynamic fixture", "!`touch dynamic-ran`")
         write_skill(project, "large-args", "Large expansion fixture", "$ARGUMENTS " * 1000)
@@ -147,6 +156,7 @@ def run(binary, t3_fixture=None):
                 notices = [frame["params"]["update"] for frame in probe.seen if "method" in frame]
                 assert notices == [{"sessionUpdate": "available_commands_update", "availableCommands": [
                     {"name": "$personal-notes", "description": "Personal fixture"},
+                    {"name": "$standard-notes", "description": "Standard personal fixture"},
                 ]}], notices
             if directory != str(workspace):
                 with Acp(binary, args, directory, env) as standard:
@@ -177,7 +187,7 @@ def run(binary, t3_fixture=None):
             assert len(files) == 1 and files[0].name == session_id and files[0].stat().st_mode & 0o777 == 0o600
             assert len(result["configOptions"][0]["options"]) == 3
             catalog = acp.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
-            assert {item["name"] for item in catalog["params"]["update"]["availableCommands"]} == {"$personal-notes", "$project-skills"}
+            assert {item["name"] for item in catalog["params"]["update"]["availableCommands"]} == {"$personal-notes", "$standard-notes", "$project-skills"}
             model = acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             thinking = model["configOptions"][1]["options"]
             selected = next(option["value"] for option in thinking if option["value"] == "low")
@@ -202,8 +212,11 @@ def run(binary, t3_fixture=None):
             def skill_prompt(text, succeeds=True):
                 return acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": text}], succeeds=succeeds)
             assert skill_prompt("$project-skills")["stopReason"] == "end_turn"
-            assert "$project-notes" in str(acp.seen) and "$remote-notes" not in str(acp.seen)
-            for unavailable in ("$remote-notes", "$linked-file", "$dynamic-notes", "$large-args " + "x" * 100):
+            listing = acp.seen[-2]["params"]["update"]["content"]["text"]
+            assert len([line for line in listing.splitlines() if line.startswith("$")]) == 17
+            assert "$project-notes" in listing and "$remote-notes" not in listing
+            assert "$openspec-verify-change — Verify implementation against a change artifact. Report issues with file locations." in listing
+            for unavailable in ("$remote-notes", "$linked-file", "$dynamic-notes", "$ego-browser", "$writable-notes", "$large-args " + "x" * 100):
                 skill_prompt(unavailable, succeeds=False)
             assert len(Model.requests) == before_skills and not (workspace / "dynamic-ran").exists()
             assert skill_prompt("$personal-notes literal $(touch skill-ran)")["stopReason"] == "end_turn"
@@ -248,13 +261,28 @@ def run(binary, t3_fixture=None):
         if t3_fixture:
             started = len(Model.requests)
             Model.release.clear()
-            subprocess.run(["node", t3_fixture, binary, str(workspace)], check=True, env=env, timeout=140)
+            subprocess.run(["node", t3_fixture, binary, str(workspace)], check=True, env=env, timeout=225)
             Model.release.set()
             requests = Model.requests[started:]
             assert any(item.get("reasoning_effort") == "low" and "t3-acp-first" in str(item["messages"])
                        and "t3-acp-second" in str(item["messages"]) for item in requests)
             assert any("PROJECT_SKILL_BODY t3-acp-first" in str(item["messages"]) for item in requests)
-            assert any("PERSONAL_SKILL_BODY t3-acp-second" in str(item["messages"]) for item in requests)
+            assert any("STANDARD_SKILL_BODY t3-acp-second" in str(item["messages"]) for item in requests)
+            assert any("OPENSPEC_SKILL_BODY fresh-local" in str(item["messages"]) for item in requests)
+            def last_user(item):
+                return str(next(message["content"] for message in reversed(item["messages"]) if message["role"] == "user"))
+            assert not any(last_user(item).strip() == "$project-skills" for item in requests)
+            after_list = [item for item in requests if "OPENSPEC_SKILL_BODY after-list" in last_user(item)]
+            assert len(after_list) == 1
+            assert "LIST_HANDOFF_HISTORY" in str(after_list[0]["messages"]) and "LIST_HANDOFF_HISTORY" not in last_user(after_list[0])
+            personal = [last_user(item) for item in requests if "STANDARD_SKILL_BODY after-handoff" in last_user(item)]
+            assert len(personal) == 1 and "PERSONAL_HANDOFF_HISTORY" in personal[0]
+            assert len(requests) == 10, [last_user(item) for item in requests]  # Both lists ran without inference.
+            assert any("OPENSPEC_SKILL_BODY condensed-context" in last_user(item) and "CONDENSED_HANDOFF_HISTORY" in last_user(item) for item in requests)
+            for marker in ("AMBIGUOUS_HISTORY_CHECK", "FAKE_MARKER_CHECK", "CURRENT_MARKER_CHECK"):
+                prompts = [last_user(item) for item in requests if marker in last_user(item)]
+                assert len(prompts) == 1 and "Selected skill" not in prompts[0], prompts
+            assert not any("PERSONAL_SKILL_BODY" in last_user(item) for item in requests)
             assert not injected.exists() and Model.probes == 1
         server.shutdown()
 

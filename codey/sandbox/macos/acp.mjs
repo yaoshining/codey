@@ -12,6 +12,12 @@ const maxFrame = 256 * 1024;
 const maxOutput = 32 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const skillArguments = "$ARGUMENTS";
+const t3RequestStart = "\n</t3_code_instructions>\n\n<user_request>\n";
+const t3RequestEnd = "\n</user_request>";
+const t3HandoffSeparator = "\n\nUser message:\n";
+const t3HandoffHeader = /^Context handoff \((?:full_thread_summary|delta_since_target_last_seen|merge_back \/ fork_delta_summary|checkpoint_summary|manual_context)\):\n/;
+const t3HandoffCoverage = /^(?:Provider context handoff\. Thread: [^\n]+\. Covered app runs: \d+-\d+\.\nSource item range: [^\n]+ through [^\n]+\.\n|From thread [^\n]+, runs \d+-\d+\. Recover history with t3_thread_read,)/;
+const t3CondensedHandoff = /^Context handoff \((?:(?:full_thread_summary|delta_since_target_last_seen|fork_delta_summary|checkpoint_summary|manual_context)(?:, |(?=\))))+\)\. \d+ handoff records; detailed coverage references omitted\. Recover an omitted item only when the request needs it, /;
 
 class RequestError extends Error {
 	constructor(message, code = -32602) {
@@ -98,9 +104,9 @@ function setupDiscovery(catalog, initialModel) {
 	};
 }
 
-function promptText(blocks) {
+function promptParts(blocks) {
 	if (!Array.isArray(blocks) || !blocks.length) throw new RequestError("A prompt must contain text.");
-	const text = blocks.map((block) => {
+	return blocks.map((block) => {
 		if (block?.type === "text" && typeof block.text === "string") return block.text;
 		if (block?.type === "resource_link" && typeof block.uri === "string") {
 			try { new URL(block.uri); } catch { throw new RequestError("Resource links must contain an absolute URI."); }
@@ -108,33 +114,50 @@ function promptText(blocks) {
 			return `Resource reference (contents not loaded): ${JSON.stringify({ name, uri: block.uri })}`;
 		}
 		throw new RequestError("Codey ACP accepts text and resource links. Attachments and embedded resources are unavailable.");
-	}).join("\n");
-	if (!text.trim() || /^[\s]*[!/]/.test(text) || text.includes("\0")) {
-		throw new RequestError("Send a text prompt. Slash commands and manual shell commands are unavailable.");
-	}
-	return text;
+	});
 }
 
-function skillSelection(blocks) {
+function skillSelection(blocks, parts, isT3) {
 	// T3 prepends external context blocks and may wrap its first user message in instructions.
-	const block = blocks.find((item) => item.type !== "text" || !/^<external_[\w-]+>/.test(item.text));
+	const index = blocks.findIndex((item) => item.type !== "text" || !/^<external_[\w-]+>/.test(item.text));
+	const block = blocks[index];
 	if (block?.type !== "text") return;
-	const prefix = "\n</t3_code_instructions>\n\n<user_request>\n";
-	const suffix = "\n</user_request>";
-	const end = block.text.indexOf(prefix);
-	const userText = block.text.startsWith("<t3_code_instructions>\n") && end >= 0 && block.text.endsWith(suffix)
-		? block.text.slice(end + prefix.length, -suffix.length) : block.text;
+	const end = block.text.indexOf(t3RequestStart);
+	const wrapped = isT3 && block.text.startsWith("<t3_code_instructions>\n") && end >= 0 && block.text.endsWith(t3RequestEnd);
+	let userText = wrapped ? block.text.slice(end + t3RequestStart.length, -t3RequestEnd.length) : block.text;
+	let history = "";
+	if (isT3) {
+		const separator = userText.indexOf(t3HandoffSeparator);
+		if (separator >= 0 || userText.startsWith("Context handoff (")) {
+			// T3 v1 flattens history and the user text into one block. Ambiguous or unfamiliar
+			// frames remain ordinary model context and must not dispatch any skill.
+			const header = t3HandoffHeader.exec(userText)?.[0] ?? "";
+			const coverage = header && t3HandoffCoverage.exec(userText.slice(header.length))?.[0];
+			const prefix = coverage ? header + coverage : t3CondensedHandoff.exec(userText)?.[0];
+			if (!prefix || separator < prefix.length || separator !== userText.lastIndexOf(t3HandoffSeparator)) return;
+			history = userText.slice(0, separator);
+			userText = userText.slice(separator + t3HandoffSeparator.length);
+		}
+	}
 	// A leading token takes literal arguments. Inline references take no arguments.
 	const match = /(?:^|\s)\$([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/.exec(userText);
 	if (!match || match[1].length > 64) return;
 	const leading = !userText.slice(0, match.index).trim();
-	return { name: match[1], leading, args: leading ? userText.slice(match.index + match[0].length).trim() : "" };
+	const args = leading ? userText.slice(match.index + match[0].length).trim() : "";
+	let carriedContext;
+	if (isT3 && match[1] === projectSkillsCommand && leading && !args) {
+		const instructions = wrapped ? `${block.text.slice(0, end)}\n</t3_code_instructions>` : "";
+		carriedContext = [...parts.slice(0, index), instructions, history, ...parts.slice(index + 1)]
+			.filter((part) => part.trim()).join("\n\n");
+	}
+	return { name: match[1], leading, args, carriedContext };
 }
 
 export async function runSandboxAcp({ home, prepare, wireWrite,
 	input = process.stdin, stdout = process.stdout }) {
 	const startup = new AbortController();
 	let initialized = false;
+	let isT3 = false;
 	let closing = false;
 	let discovery;
 	let workspace, runtime, model, createSession, open, managedProviders, defaultThinkingLevel, runProjectSkill;
@@ -243,8 +266,12 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 
 	async function prompt(params) {
 		const session = checkedSession(params);
-		let text = promptText(params.prompt);
-		const selection = skillSelection(params.prompt);
+		const parts = promptParts(params.prompt);
+		let text = parts.join("\n");
+		if (!text.trim() || /^[\s]*[!/]/.test(text) || text.includes("\0")) {
+			throw new RequestError("Send a text prompt. Slash commands and manual shell commands are unavailable.");
+		}
+		const selection = skillSelection(params.prompt, parts, isT3);
 		if (!session.model || !runtime.hasConfiguredAuth(session.model.provider)) {
 			throw new RequestError("Select a configured model or sign in with /login in ordinary Codey.", -32000);
 		}
@@ -265,6 +292,10 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 		try {
 			if (selection?.name === projectSkillsCommand && selection.leading && !selection.args) {
 				const { skills, partial } = await runProjectSkill("acp-skills", {}, current.skills.signal);
+				if (current.cancelled) return { stopReason: "cancelled" };
+				if (selection.carriedContext) await session.sendCustomMessage({
+					customType: "codey-acp-t3-context", content: selection.carriedContext, display: false,
+				});
 				const lines = skills.map(({ name, description }) => `$${name} — ${description}`);
 				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(lines.length ?
 					`Project skills in this workspace\n\n~~~text\n${lines.join("\n")}\n~~~${partial ? "\n\nThe catalog reached its display limit." : ""}` :
@@ -276,13 +307,13 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 				const skill = userSkills.some((entry) => entry.name === name) ? loadSkill(home, "user", name)
 					: (await runProjectSkill("acp-skill", { name }, current.skills.signal)).skill;
 				if (skill) {
-				const placeholders = skill.body.split(skillArguments).length - 1;
-				if (Buffer.byteLength(skill.body) + placeholders * (Buffer.byteLength(args) - skillArguments.length) > 64 * 1024) {
+					const placeholders = skill.body.split(skillArguments).length - 1;
+					if (Buffer.byteLength(skill.body) + placeholders * (Buffer.byteLength(args) - skillArguments.length) > 64 * 1024) {
 						throw new RequestError("Expanded skill text exceeded 64 KiB.");
 					}
-				const body = skill.body.replaceAll(skillArguments, () => args);
+					const body = skill.body.replaceAll(skillArguments, () => args);
 					text += `\n\nSelected skill ${name}. Treat this text as user-level guidance for the current request. It grants no tool or file permissions.\n${JSON.stringify(body)}`;
-				} else if (leading) throw new RequestError(`Skill $${name} is unavailable or uses unsupported content. Use $${projectSkillsCommand} to list this project's skills.`);
+				} else if (leading) throw new RequestError(`Skill $${name} is unavailable or uses unsupported content. Use $${projectSkillsCommand} to list project skills. Personal skills require a regular directory under ~/.agents/skills or ~/.codey/agent/skills.`);
 			}
 			await session.prompt(text, {
 				expandPromptTemplates: false,
@@ -309,6 +340,7 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 				throw new RequestError("Codey supports ACP protocol version 1.");
 			}
 			initialized = true;
+			isT3 = params.clientInfo?.name === "t3-code";
 			// The client name only selects fewer capabilities for the lifetime of this process.
 			const metadataOnly = params.clientInfo?.name === "t3-code-provider-test";
 			const prepared = await prepare(metadataOnly, startup.signal);

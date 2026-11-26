@@ -6,6 +6,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { handoffCoverage } from "@t3tools/provider-core/server/handoffBudget";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
@@ -22,6 +23,7 @@ import { makeAcpRegistryAdapterV2 } from "./src/server/adapter.ts";
 import { AcpRegistryDriver } from "./src/server/driver.ts";
 import { makeAcpRegistryLearnedModelOptionsStore } from "./src/server/learnedModelOptions.ts";
 import { probeAcpRegistryConfiguration } from "./src/server/probe.ts";
+import { deliverContextHandoffs, withInlineContext } from "./codey-context-handoff-fixture.ts";
 
 const [binary, cwd, mode, version] = process.argv.slice(2);
 const threadId = "thread:codey-acp-fixture";
@@ -57,7 +59,9 @@ const probeSettings = Effect.gen(function* () {
 		assert.ok(learned.get("fixture/fixture-think")?.some((option) =>
 			option.id === "thinking" && option.options?.some(({ id }) => id === "low")));
 		assert.deepEqual(slashCommands, []);
-		assert.deepEqual(skills.map(({ name, path }) => [name, path]), [["personal-notes", "acp://skill/personal-notes"]]);
+		assert.deepEqual(skills.map(({ name, path }) => [name, path]), [
+			["personal-notes", "acp://skill/personal-notes"], ["standard-notes", "acp://skill/standard-notes"],
+		]);
 	}
 	console.log("PASS: real pinned T3 Settings probe discovered the configured models and per-model effort from /, HOME and the project.");
 }).pipe(Effect.provide(layer));
@@ -114,10 +118,12 @@ function localCommand(fn, initialNativeThreadId) {
 	}).pipe(Effect.scoped, Effect.provide(layer));
 }
 
-function send(runtime, providerThread, text, ordinal, interrupt = false) {
+function send(runtime, providerThread, text, ordinal, { interrupt = false, expected, inlineContextLength } = {}) {
 	return Effect.gen(function* () {
 		let turnId;
+		let displayed = false;
 		const terminal = yield* runtime.events.pipe(Stream.tap((event) => Effect.gen(function* () {
+			displayed ||= expected !== undefined && JSON.stringify(event).includes(expected);
 			if (event.providerTurn?.id && event.providerTurn.ordinal === ordinal) turnId = event.providerTurn.id;
 			if (interrupt && turnId && JSON.stringify(event).includes("SLOW_STARTED")) {
 				interrupt = false;
@@ -131,10 +137,12 @@ function send(runtime, providerThread, text, ordinal, interrupt = false) {
 			threadId, runId, runOrdinal: ordinal, providerTurnOrdinal: ordinal,
 			attemptId: `attempt:${runId}`, rootNodeId: `node:${runId}`, providerThread,
 			message: { messageId: `message:${runId}`, text, attachments: [], createdBy: "user", creationSource: "web" },
+			...(inlineContextLength === undefined ? {} : { inlineContextLength }),
 			modelSelection: selection, runtimePolicy: policy,
 		});
 		const result = yield* Fiber.await(terminal);
 		assert.equal(result._tag, "Success", JSON.stringify(result));
+		if (expected) assert.ok(displayed, `T3 did not receive ${expected}`);
 		return result.value.value?.status;
 	});
 }
@@ -147,10 +155,12 @@ const chat = Effect.gen(function* () {
 			Effect.repeat({ until: (value) => value._tag === "Some", times: 200, schedule: Schedule.spaced("25 millis") }),
 		);
 		assert.equal(commands._tag, "Some");
-		assert.deepEqual(commands.value.skills.map(({ name }) => name), ["personal-notes", "project-skills"]);
+		assert.deepEqual(commands.value.skills.map(({ name }) => name), ["personal-notes", "standard-notes", "project-skills"]);
 		// ChatComposer's skill selection inserts `$${item.skill.name} `. The first
 		// real adapter turn also adds its orchestration wrapper and runtime block.
 		assert.equal(yield* send(runtime, thread, "$project-notes t3-acp-first", 1), "completed");
+		assert.equal(yield* send(runtime, thread, "$project-skills", 2, { expected: "$openspec-verify-change" }), "completed");
+		assert.equal(yield* send(runtime, thread, "$openspec-verify-change fresh-local", 3), "completed");
 		return thread;
 	}));
 	const nativeId = first.nativeThreadRef?.nativeId;
@@ -158,10 +168,53 @@ const chat = Effect.gen(function* () {
 	yield* localCommand((runtime) => Effect.gen(function* () {
 		const second = yield* runtime.resumeThread({ providerThread: first });
 		assert.equal(second.nativeThreadRef?.nativeId, nativeId);
-		assert.equal(yield* send(runtime, second, "$personal-notes t3-acp-second", 2), "completed");
-		assert.equal(yield* send(runtime, second, "slow fixture", 3, true), "interrupted");
+		assert.equal(yield* send(runtime, second, "$standard-notes t3-acp-second", 4), "completed");
+		assert.equal(yield* send(runtime, second, "slow fixture", 5, { interrupt: true }), "interrupted");
 	}), nativeId);
 	console.log("PASS: pinned T3 Local command adapter negotiated ACP v1, prompted, cold-resumed and cancelled a turn.");
 });
-await Effect.runPromise((mode === "probe" ? settingsSnapshot.pipe(Effect.andThen(probeSettings)) : chat)
-	.pipe(Effect.timeout("120 seconds")));
+
+function sendHandoff(runtime, providerThread, userText, ordinal, historyText, { expected, condensed = false } = {}) {
+	return Effect.gen(function* () {
+		const message = { itemId: `item:history-${ordinal}`, role: "user", threadId, runId: "run:original-pi",
+			providerThreadId: "thread:original-pi", status: "completed", kind: "user_message", text: historyText };
+		const coveredRunOrdinals = { from: 1, to: 1 };
+		const coverage = handoffCoverage({ threadId, coveredRunOrdinals, items: [{ id: message.itemId }] });
+		const delivery = yield* deliverContextHandoffs({
+			handoffs: [{ threadId, strategy: "full_thread_summary", coveredRunOrdinals,
+				history: { messages: [message], omittedItems: 0, coverage: condensed ? `${coverage}\n${"F".repeat(5000)}` : coverage } }],
+			providerThread, alreadyDeliveredItemIds: new Set(), budget: 16_000, persist: () => Effect.void,
+		});
+		const text = withInlineContext(delivery.context, userText);
+		const header = condensed ? "Context handoff (full_thread_summary). 1 handoff records;" : "Context handoff (full_thread_summary):\n";
+		assert.ok(text.startsWith(header) && text.includes(historyText));
+		assert.equal(yield* send(runtime, providerThread, text, ordinal,
+			{ expected, inlineContextLength: text.length - userText.length }), "completed");
+		yield* delivery.delivered;
+	});
+}
+
+const handoff = Effect.gen(function* () {
+	const first = yield* localCommand((runtime) => Effect.gen(function* () {
+		const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
+		yield* sendHandoff(runtime, thread, "$project-skills", 1, "LIST_HANDOFF_HISTORY $personal-notes and $project-skills", { expected: "$openspec-verify-change" });
+		return thread;
+	}));
+	// A new ACP process must retain the first turn's historical context even though it was a local list.
+	yield* localCommand((runtime) => Effect.gen(function* () {
+		const thread = yield* runtime.resumeThread({ providerThread: first });
+		assert.equal(yield* send(runtime, thread, "$openspec-verify-change after-list", 2), "completed");
+	}), first.nativeThreadRef.nativeId);
+	yield* localCommand((runtime) => Effect.gen(function* () {
+		const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
+		yield* sendHandoff(runtime, thread, "$standard-notes after-handoff", 1, "PERSONAL_HANDOFF_HISTORY $project-skills $personal-notes");
+		yield* sendHandoff(runtime, thread, "Current ordinary text AMBIGUOUS_HISTORY_CHECK", 2, "Quoted marker:\n\nUser message:\n$personal-notes");
+		assert.equal(yield* send(runtime, thread, "Typed marker only:\n\nUser message:\n$project-skills FAKE_MARKER_CHECK", 3), "completed");
+		yield* sendHandoff(runtime, thread, "Current marker example:\n\nUser message:\n$standard-notes CURRENT_MARKER_CHECK", 4, "Old dollar token $personal-notes");
+		yield* sendHandoff(runtime, thread, "$openspec-verify-change condensed-context", 5, "CONDENSED_HANDOFF_HISTORY $personal-notes", { condensed: true });
+	}));
+	console.log("PASS: pinned T3 handoff delivery listed skills locally, retained history on cold resume, and routed only the current unambiguous skill.");
+});
+
+await Effect.runPromise((mode === "probe" ? settingsSnapshot.pipe(Effect.andThen(probeSettings)) : chat.pipe(Effect.andThen(handoff)))
+	.pipe(Effect.timeout("210 seconds")));
