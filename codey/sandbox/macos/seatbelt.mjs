@@ -75,7 +75,12 @@ export async function openSeatbelt(workspace, hostHome) {
 		TOOLCHAIN_LINKS: brew ? `${brew}/opt` : "/dev/null",
 		DYLD_CACHE: dyldCache,
 	};
-	const env = { HOME: join(scratch, "home"), TMPDIR: scratch, PATH: "/usr/bin:/bin", LANG: "C", TERM: "dumb" };
+	const env = {
+		HOME: join(scratch, "home"), TMPDIR: scratch, PATH: "/usr/bin:/bin", LANG: "C", TERM: "dumb",
+		// Shared OpenSSL builds can otherwise open a host config during Node startup.
+		// Pass an empty config to the worker and its children, without changing the host.
+		OPENSSL_CONF: "/dev/null",
+	};
 	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, name, args, signal });
 	try {
 		mkdirSync(env.HOME, { mode: 0o700 });
