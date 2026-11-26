@@ -85,17 +85,17 @@ export async function hostModel(home, workspace, hostDir) {
 	// snapshot consumed by the SDK's initial model selection.
 	const runtime = await ModelRuntime.create({ credentials, modelsPath, modelsStore, allowModelNetwork: false });
 	const warnings = [warning].filter(Boolean);
+	const managedProviders = new Set();
 	try {
 		const saved = providerStore(home, workspace)?.list();
 		if (saved) {
 			warnings.push(...saved.errors);
-			let registered = false;
 			for (const { profile } of saved.entries) {
 				if (runtime.getProvider(profile.id)) continue;
 				runtime.registerNativeProvider(providerFromProfile(profile));
-				registered = true;
+				managedProviders.add(profile.id);
 			}
-			if (registered) {
+			if (managedProviders.size) {
 				// Registration starts background catalog refreshes of its own. Finish with an
 				// availability pass after the local catalog refresh, so startup sees the new providers.
 				await runtime.refresh({ allowNetwork: false });
@@ -103,7 +103,7 @@ export async function hostModel(home, workspace, hostDir) {
 			}
 		}
 	} catch { warnings.push("Could not load the private Codey provider directory."); }
-	return { runtime, agentDir, settings, warning: warnings.join("\n") || undefined };
+	return { runtime, agentDir, settings, managedProviders, warning: warnings.join("\n") || undefined };
 }
 
 function lockedCredentials(authPath) {

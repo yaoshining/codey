@@ -185,7 +185,8 @@ async function launch() {
 			});
 			model = selection.model;
 		}
-		if (metadataOnly) return { runtime, model, defaultThinkingLevel };
+		const { managedProviders } = host;
+		if (metadataOnly) return { runtime, model, defaultThinkingLevel, managedProviders };
 		const newSession = (cwd, sandbox, sessionManager, currentModel, extras = []) => {
 			const settingsManager = SettingsManager.inMemory({
 				defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true,
@@ -205,7 +206,7 @@ async function launch() {
 				tools: customTools.map(({ name }) => name), customTools,
 			});
 		};
-		return { workspace, runtime, model, newSession,
+		return { workspace, runtime, model, newSession, defaultThinkingLevel, managedProviders,
 			createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel) };
 	}
 	try {

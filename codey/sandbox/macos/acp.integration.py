@@ -14,6 +14,32 @@ from threading import Thread
 fixtures = runpy.run_path(str(Path(__file__).with_name("rpc.integration.py")))
 Model, Rpc = fixtures["Model"], fixtures["Rpc"]
 args = ["acp", "--sandbox=workspace-write"]
+alias = "litellm/openai/fixture-one"
+alias_levels = ["off", "low", "medium", "high", "xhigh", "max"]
+
+
+class Gateway(Model):
+    responses = []
+
+    def do_POST(self):
+        if self.path != "/v1/responses":
+            return super().do_POST()
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.responses.append((body, self.headers.get("Authorization")))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        item = {"type": "message", "id": "fixture", "role": "assistant", "status": "in_progress", "content": []}
+        text = {"type": "output_text", "text": "ALIAS_OK"}
+        for event in [
+            {"type": "response.output_item.added", "item": item},
+            {"type": "response.content_part.added", "part": {**text, "text": ""}},
+            {"type": "response.output_text.delta", "delta": text["text"]},
+            {"type": "response.output_item.done", "item": {**item, "status": "completed", "content": [text]}},
+            {"type": "response.completed", "response": {"status": "completed",
+             "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4}}},
+        ]:
+            self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
 
 
 class Acp(Rpc):
@@ -36,7 +62,7 @@ class Acp(Rpc):
 
 
 def run(binary, t3_fixture=None):
-    with tempfile.TemporaryDirectory(prefix="codey-acp-") as temp, ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
+    with tempfile.TemporaryDirectory(prefix="codey-acp-") as temp, ThreadingHTTPServer(("127.0.0.1", 0), Gateway) as server:
         root = Path(temp).resolve()
         home, workspace, other = [root / name for name in ("home", "workspace", "other")]
         for folder in (home, workspace, other):
@@ -52,9 +78,11 @@ def run(binary, t3_fixture=None):
         (agent / "settings.json").write_text(json.dumps({"defaultProvider": "fixture", "defaultModel": "fixture-one"}))
         profiles = agent / "custom-providers"
         profiles.mkdir(mode=0o700)
-        profile = profiles / "custom.json"
-        profile.write_text(json.dumps({"displayName": "Custom", "api": "openai-completions", "auth": "none",
-                                      "baseUrl": endpoint + "/v1", "models": ["metadata-only"]}))
+        profile = profiles / "litellm.json"
+        profile.write_text(json.dumps({"displayName": "LiteLLM", "api": "openai-responses",
+                                      "auth": "key", "key": "fake-litellm-key", "baseUrl": endpoint + "/v1",
+                                      "models": ["openai/fixture-one"],
+                                      "reasoningLevels": {"openai/fixture-one": alias_levels[1:]}}))
         profile.chmod(0o600)
         (workspace / ".env").write_text("protected")
         marker = other / "fixture"
@@ -81,8 +109,13 @@ def run(binary, t3_fixture=None):
                 result = probe.request("session/new", **setup)
                 sid = result["sessionId"]
                 assert {option["value"] for option in result["configOptions"][0]["options"]} == {
-                    "fixture/fixture-one", "fixture/fixture-think", "custom/metadata-only"
+                    "fixture/fixture-one", "fixture/fixture-think", alias
                 }
+                assert result["models"]["currentModelId"] == "fixture/fixture-one"
+                catalog = {entry["modelId"]: entry for entry in result["models"]["availableModels"]}
+                assert catalog[alias]["name"] == "openai/fixture-one"
+                assert [item["value"] for item in catalog[alias]["_meta"]["reasoningEfforts"]] == alias_levels
+                assert catalog["fixture/fixture-one"]["_meta"]["reasoningEfforts"] == [{"value": "off", "label": "off"}]
                 probe.request("session/set_config_option", sessionId=sid, configId="model", value="fixture/fixture-think")
                 probe.request("session/set_config_option", sessionId=sid, configId="thinking", value="low")
                 probe.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "boundary fixture"}], succeeds=False)
@@ -99,8 +132,9 @@ def run(binary, t3_fixture=None):
                     standard.request("initialize", protocolVersion=1, clientInfo={"name": "ordinary-t3-chat"}, succeeds=False)
                     standard.request("session/new", cwd=directory, mcpServers=[], succeeds=False)
         if t3_fixture:
-            subprocess.run(["node", t3_fixture, binary, str(workspace), "probe"], check=True, env=env, timeout=140)
-        assert not Model.requests and Model.probes == 1 and not injected.exists()
+            version = subprocess.check_output([binary, "--version"], text=True, cwd=workspace, env=env).strip()
+            subprocess.run(["node", t3_fixture, binary, str(workspace), "probe", version], check=True, env=env, timeout=140)
+        assert not Model.requests and not Gateway.responses and Model.probes == 1 and not injected.exists()
         assert not (agent / "sandbox-acp").exists() and not (agent / "auth.json").exists()
         print("PASS: discovery only, with invalid workspace roots, no persistence, network or tools.", flush=True)
         setup = {"cwd": str(workspace), "mcpServers": []}
@@ -143,6 +177,15 @@ def run(binary, t3_fixture=None):
             assert "contents not loaded" in str(Model.requests[0]["messages"])
             assert acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": "slow fixture"}])["stopReason"] == "cancelled"
             Model.release.set()
+            changed = acp.request("session/set_config_option", sessionId=session_id, configId="model", value=alias)
+            assert [option["value"] for option in changed["configOptions"][1]["options"]] == alias_levels
+            acp.request("session/set_config_option", sessionId=session_id, configId="thinking", value="high")
+            assert acp.request("session/prompt", sessionId=session_id,
+                               prompt=[{"type": "text", "text": "alias wire fixture"}])["stopReason"] == "end_turn"
+            body, auth = Gateway.responses[-1]
+            assert body["model"] == "openai/fixture-one" and body["reasoning"]["effort"] == "high"
+            assert auth == "Bearer fake-litellm-key"
+            acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             with Acp(binary, args, workspace, env) as competing:
                 competing.initialize()
                 assert "in use" in competing.request("session/load", sessionId=session_id, **setup, succeeds=False)["message"]
@@ -161,7 +204,7 @@ def run(binary, t3_fixture=None):
         for flags in (["acp"], [*args, "--no-tools"], [*args, "--mode", "rpc"]):
             output = subprocess.run([binary, *flags], input="", text=True, capture_output=True, env=env, cwd=workspace, timeout=15)
             assert output.returncode != 0 and not output.stdout, output
-        print("PASS: installed Codey ACP v1 negotiation, safe workspace binding, model/effort, streamed tool and text, cancel, replay, locks and cold resume.", flush=True)
+        print("PASS: installed ACP preserved the alias route and authorization, sent high effort, and passed sandbox, stream, cancel and cold resume checks.", flush=True)
         if t3_fixture:
             started = len(Model.requests)
             Model.release.clear()

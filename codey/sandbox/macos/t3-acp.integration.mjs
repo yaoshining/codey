@@ -4,6 +4,9 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -14,16 +17,21 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as Registry from "./src/server/AcpRegistrySupport.ts";
 import { AcpRegistrySettings } from "./src/settings.ts";
 import { makeAcpRegistryAdapterV2 } from "./src/server/adapter.ts";
+import { AcpRegistryDriver } from "./src/server/driver.ts";
+import { makeAcpRegistryLearnedModelOptionsStore } from "./src/server/learnedModelOptions.ts";
 import { probeAcpRegistryConfiguration } from "./src/server/probe.ts";
 
-const [binary, cwd, mode] = process.argv.slice(2);
+const [binary, cwd, mode, version] = process.argv.slice(2);
 const threadId = "thread:codey-acp-fixture";
 const selection = { instanceId: "acpRegistry", model: "fixture/fixture-think", options: [{ id: "thinking", value: "low" }] };
 const policy = { cwd, runtimeMode: "approval-required", interactionMode: "default" };
 const environment = { HOME: process.env.HOME, PATH: process.env.PATH, PI_SKIP_VERSION_CHECK: "1" };
 const node = Layer.merge(NodeServices.layer, NodeCrypto.layer);
+const alias = "litellm/openai/fixture-one";
 const services = Layer.mergeAll(node, IdAllocator.layer, McpProviderSessions.layer,
-	TestProviderHost.layer({ cwd }).pipe(Layer.provide(node)),
+	TestProviderHost.layer({ cwd: "/", runBackgroundWork: false }).pipe(Layer.provide(node)),
+	Layer.succeed(HostProcess.Environment, environment),
+	Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, ProviderEventLoggers.NoOpProviderEventLoggers),
 	Layer.succeed(HttpClient.HttpClient, HttpClient.make(() => Effect.die("Unexpected registry HTTP request."))));
 const layer = Registry.layerFromHost.pipe(Layer.provideMerge(services));
 const settings = Schema.decodeUnknownSync(AcpRegistrySettings)({
@@ -43,13 +51,46 @@ const probeSettings = Effect.gen(function* () {
 		assert.ok(probe.ready && probe.sessionManagement.canDelete && !probe.sessionManagement.canLoad);
 		assert.equal(probe.currentModelId, "fixture/fixture-one");
 		assert.deepEqual(new Set(probe.models.map(({ id }) => id)),
-			new Set(["fixture/fixture-one", "fixture/fixture-think", "custom/metadata-only"]));
+			new Set(["fixture/fixture-one", "fixture/fixture-think", alias]));
 		assert.ok(learned.get("fixture/fixture-think")?.some((option) =>
 			option.id === "thinking" && option.options?.some(({ id }) => id === "low")));
 		assert.deepEqual([slashCommands, skills], [[], []]);
 	}
 	console.log("PASS: real pinned T3 Settings probe discovered the configured models and per-model effort from /, HOME and the project.");
 }).pipe(Effect.provide(layer));
+
+const settingsSnapshot = Effect.gen(function* () {
+	const instanceId = selection.instanceId;
+	const host = yield* ProviderHost.ProviderHost;
+	const cached = yield* makeAcpRegistryLearnedModelOptionsStore({
+		cacheDir: host.paths.providerStatusCacheDir, instanceId, settings,
+	});
+	assert.ok(version);
+	yield* cached.setVersion(version);
+	const off = { id: "thinking", label: "Thinking", type: "select", role: "reasoning",
+		currentValue: "off", options: [{ id: "off", label: "off" }] };
+	yield* cached.learn(alias, [off], "live");
+	assert.deepEqual((yield* cached.get).get(alias), [off]);
+
+	const driver = yield* AcpRegistryDriver.create({
+		instanceId, displayName: "Codey ACP fixture", enabled: true, environment: [], config: settings,
+	});
+	const next = yield* driver.snapshot.streamChanges.pipe(
+		Stream.filter((snapshot) => snapshot.status === "ready" && snapshot.models.some(({ slug }) => slug === alias)),
+		Stream.runHead, Effect.forkScoped({ startImmediately: true }),
+	);
+	yield* driver.snapshot.refresh;
+	const snapshot = (yield* Fiber.join(next)).value;
+	const direct = snapshot.models.find(({ slug }) => slug === "fixture/fixture-one");
+	const custom = snapshot.models.find(({ slug }) => slug === alias);
+	const options = (model) => model.capabilities.optionDescriptors.find(({ id }) => id === "thinking").options.map(({ id }) => id);
+	assert.equal(direct.isDefault, true);
+	assert.deepEqual(options(direct), ["off"]);
+	assert.equal(custom.isDefault ?? false, false);
+	assert.deepEqual(options(custom), ["off", "low", "medium", "high", "xhigh", "max"]);
+	assert.equal(custom.name, "openai/fixture-one");
+	console.log("PASS: real T3 Local ACP driver snapshot replaced stale off-only metadata for the non-default alias before a turn.");
+}).pipe(Effect.scoped, Effect.provide(layer));
 
 function localCommand(fn, initialNativeThreadId) {
 	return Effect.gen(function* () {
@@ -111,4 +152,5 @@ const chat = Effect.gen(function* () {
 	}), nativeId);
 	console.log("PASS: pinned T3 Local command adapter negotiated ACP v1, prompted, cold-resumed and cancelled a turn.");
 });
-await Effect.runPromise((mode === "probe" ? probeSettings : chat).pipe(Effect.timeout("120 seconds")));
+await Effect.runPromise((mode === "probe" ? settingsSnapshot.pipe(Effect.andThen(probeSettings)) : chat)
+	.pipe(Effect.timeout("120 seconds")));
