@@ -95,7 +95,7 @@ class Rpc:
             if predicate(frame):
                 return frame
 
-    def request(self, command, *, succeeds=True, **fields):
+    def request(self, command, /, *, succeeds=True, **fields):
         self.next_id += 1
         request_id = str(self.next_id)
         self.send({"id": request_id, "type": command, **fields})
