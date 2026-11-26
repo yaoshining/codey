@@ -149,14 +149,12 @@ def run(binary, t3_fixture=None):
         expected_pin = {"root": str(standard), "path": str(external), "sha256": hashlib.sha256(external.read_bytes()).hexdigest()}
         assert json.loads(trust_command("inspect", "ego-browser")) == expected_pin
         assert "changed" in trust_command("trust", "ego-browser", external, "0" * 64, succeeds=False)
-        with Acp(binary, args, workspace, env) as unapproved:
-            unapproved.initialize()
-            sid = unapproved.request("session/new", cwd=str(workspace), mcpServers=[])["sessionId"]
-            denied = unapproved.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "$ego-browser"}], succeeds=False)
-            assert "needs approval" in denied["message"] and str(external) not in str(denied)
-        empty = next((agent / "sandbox-acp").glob(f"*/{sid}"))
-        assert not any(json.loads(line).get("type") == "message" for line in empty.read_text().splitlines())
-        empty.unlink()
+        with Acp(binary, args, "/", env) as unapproved:
+            unapproved.request("initialize", protocolVersion=2, clientInfo={"name": "t3-code-provider-test"})
+            unapproved.request("session/new", cwd="/", mcpServers=[])
+            notice = unapproved.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
+            assert all(command["name"] != "$ego-browser" for command in notice["params"]["update"]["availableCommands"])
+            assert str(external) not in str(unapproved.seen)
         trust_command("trust", "ego-browser", external, expected_pin["sha256"])
         assert not (agent / "skills/ego-browser").exists() and (standard / "ego-browser").is_symlink()
         subprocess.run(["/usr/bin/curl", "--silent", "--noproxy", "*", endpoint + "/probe"], check=True, env=env)
@@ -348,9 +346,12 @@ def run(binary, t3_fixture=None):
         trust_command("untrust", "ego-browser")
         with Acp(binary, args, workspace, env) as revoked:
             revoked.initialize()
-            revoked.request("session/new", **setup)
+            sid = revoked.request("session/new", **setup)["sessionId"]
             notice = revoked.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
             assert all(command["name"] != "$ego-browser" for command in notice["params"]["update"]["availableCommands"])
+            before = len(Model.requests)
+            denied = revoked.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "$ego-browser"}], succeeds=False)
+            assert "needs approval" in denied["message"] and str(external) not in str(denied) and len(Model.requests) == before
         server.shutdown()
 
 
