@@ -76,7 +76,8 @@ def run(binary):
                "NODE_OPTIONS": f"--import={preload.resolve().as_uri()}", "NODE_USE_ENV_PROXY": "1", "HTTP_PROXY": proxy_url,
                "PI_SKIP_VERSION_CHECK": "1", "CODEY_TEST_DNS_ANSWERS": str(answers), "CODEY_TEST_DNS_LOG": str(queries)}
         subprocess.run(["node", "-e", f'fetch("http://{host}").catch(() => {{}})'], cwd=project, env=env, check=True, timeout=10)
-        assert Proxy.seen == [(host, None)], Proxy.seen
+        # Node versions can proxy plain HTTP with CONNECT or an absolute-form request.
+        assert Proxy.seen in ([(host, None)], [(f"http://{host}/", None)]), Proxy.seen
         Proxy.seen.clear()
 
         log = io.StringIO()
