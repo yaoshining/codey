@@ -1,0 +1,42 @@
+name: Verify Codey direct MCP certificate flow
+
+on:
+  push:
+    branches: [verify/codey-mcp-direct-certificate]
+    paths: [.github/workflows/codey-mcp-direct-certificate.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  terminal:
+    runs-on: xcode-27
+    timeout-minutes: 12
+    steps:
+      - name: Check out fixed Codey candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: b57c704dab2e50556a0bb8aeffe0e39824d5ad4c
+          persist-credentials: false
+      - name: Select Homebrew Node 26
+        run: |
+          brew install node
+          prefix="$(brew --prefix node)"
+          "$prefix/bin/node" -e 'process.exit(process.versions.node.startsWith("26.") ? 0 : 1)'
+          printf '%s\n' "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Prepare synthetic test dependencies
+        run: |
+          sw_vers
+          uname -m
+          git rev-parse HEAD
+          node -p 'JSON.stringify({node: process.versions.node, openssl: process.versions.openssl})'
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+      - name: Test direct and bridge MCP with loopback-only fixtures
+        run: |
+          node --test codey/test/mcp-ca.test.mjs codey/test/mcp-oauth.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-direct.integration.py ./codey/bin/codey
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge.integration.py ./codey/bin/codey
+          "$RUNNER_TEMP/codey-test/bin/python" codey/test/mcp-bridge-oauth.integration.py ./codey/bin/codey
