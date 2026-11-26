@@ -1,0 +1,37 @@
+name: Verify Codey T3 sandbox startup and resume
+on:
+  push:
+    branches: [verify/codey-t3-sandbox-resume]
+    paths: [.github/workflows/codey-t3-sandbox-resume.yml]
+permissions:
+  contents: read
+jobs:
+  resume:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 4bad3f8ce99efc1d49a0cbc88f6511de6cfe578d
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Prepare Codey and pinned T3 provider adapter
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 4bad3f8ce99efc1d49a0cbc88f6511de6cfe578d
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          git init --quiet "$RUNNER_TEMP/t3"
+          git -C "$RUNNER_TEMP/t3" fetch --quiet --depth 1 https://github.com/yaoshining/t3code.git a22a4f9bba5d3e93ef673014549f83fd915f9677
+          git -C "$RUNNER_TEMP/t3" checkout --quiet --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/t3" rev-parse HEAD
+          test "$(git -C "$RUNNER_TEMP/t3" rev-parse HEAD)" = a22a4f9bba5d3e93ef673014549f83fd915f9677
+          (cd "$RUNNER_TEMP/t3" && CI=true npx --yes --package=pnpm@12.14.0 pnpm --filter @t3tools/provider-pi... --filter @t3tools/provider-testing... install --frozen-lockfile --ignore-scripts)
+          cp codey/sandbox/macos/t3-adapter.integration.mjs "$RUNNER_TEMP/t3/packages/provider-pi/codey-fixture.mjs"
+      - name: Apple Seatbelt and real T3 adapter
+        run: python3 codey/sandbox/macos/rpc.integration.py ./codey/bin/codey "$RUNNER_TEMP/t3/packages/provider-pi/codey-fixture.mjs"
