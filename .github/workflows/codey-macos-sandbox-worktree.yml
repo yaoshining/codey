@@ -1,0 +1,48 @@
+name: Verify Codey macOS sandbox worktree
+
+on:
+  push:
+    branches: [verify/codey-macos-sandbox-worktree]
+    paths: [.github/workflows/codey-macos-sandbox-worktree.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  seatbelt:
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - name: Check out fixed Codey candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 067dbd2193387e85eedae9d4f08975ca6bf446f0
+          persist-credentials: false
+      - name: Select Homebrew Node 26
+        run: |
+          brew install node
+          prefix="$(brew --prefix node)"
+          "$prefix/bin/node" -e 'process.exit(process.versions.node.startsWith("26.") ? 0 : 1)'
+          printf '%s\n' "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Prepare synthetic fixtures
+        run: |
+          sw_vers
+          uname -m
+          git rev-parse HEAD
+          /usr/bin/xcrun --find git
+          node -p 'JSON.stringify({node: process.versions.node, openssl: process.versions.openssl})'
+          npm ci --ignore-scripts --no-audit --no-fund
+          node codey/hydrate-model-data.mjs
+          python3 -m venv "$RUNNER_TEMP/codey-test"
+          "$RUNNER_TEMP/codey-test/bin/pip" install --disable-pip-version-check pexpect==4.9.0 ptyprocess==0.7.0
+      - name: Test worktree management under real Seatbelt
+        run: |
+          "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/worktree.integration.py ./codey/bin/codey
+      - name: Test sandbox and ordinary worktree regression
+        run: |
+          node --test codey/test/worktree.test.mjs codey/test/macos-sandbox.test.mjs codey/test/macos-review.test.mjs codey/test/review.test.mjs
+          "$RUNNER_TEMP/codey-test/bin/python" codey/sandbox/macos/integration.py ./codey/bin/codey
+      - name: Inspect synthetic sandbox denials after a failure
+        if: failure()
+        run: |
+          /usr/bin/log show --last 5m --style compact --predicate 'eventMessage CONTAINS[c] "sandbox" AND (eventMessage CONTAINS[c] "codey-worktree" OR eventMessage CONTAINS[c] "process-exec")' | tail -n 75
