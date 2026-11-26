@@ -27,7 +27,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: a5e07eee664e4cdfed58af1e022058323a5c6835
+          ref: 86ce0cd85537f835ddc2442d1fd40e96636cd79f
           persist-credentials: false
       - name: Select official Node 24
         if: ${{ !matrix.brew }}
