@@ -101,7 +101,12 @@ export async function hostModel(home, workspace, hostDir) {
 				runtime.registerNativeProvider(providerFromProfile(profile));
 				registered = true;
 			}
-			if (registered) await runtime.refresh({ allowNetwork: false });
+			if (registered) {
+				// Registration starts background catalog refreshes of its own. Finish with an
+				// availability pass after the local catalog refresh, so startup sees the new providers.
+				await runtime.refresh({ allowNetwork: false });
+				await runtime.getAvailable();
+			}
 		}
 	} catch { warnings.push("Could not load the private Codey provider directory."); }
 	return { runtime, agentDir, settings, warning: warnings.join("\n") || undefined };

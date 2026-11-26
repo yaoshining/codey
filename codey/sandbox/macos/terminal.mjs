@@ -156,7 +156,10 @@ async function launch() {
 		if (host.warning) console.error(host.warning);
 		let model = values.provider && runtime.getModel(values.provider, values.model);
 		if (values.provider && !model) throw new Error("The selected provider/model is unavailable.");
-		if (model && !runtime.hasConfiguredAuth(model.provider)) {
+		// An explicit selection can arrive while a newly registered provider's auth
+		// snapshot is being published. Confirm it through the underlying auth check.
+		if (model && !runtime.hasConfiguredAuth(model.provider) &&
+			!await runtime.checkAuth(model.provider, { signal: startup.signal })) {
 			throw new Error(`Authentication is unavailable for "${model.provider}". ${loginGuidance}`);
 		}
 		const { defaultProvider, defaultModel, defaultThinkingLevel } = host.settings;

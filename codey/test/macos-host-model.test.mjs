@@ -66,6 +66,23 @@ assert.equal(warmed.isUsingOAuth("openai-codex"), true);
 assert.equal(existsSync(join(agent, "models.json")), false);
 assert.equal(readFileSync(cache, "utf8"), catalog);
 assert.deepEqual(JSON.parse(readFileSync(auth, "utf8")), credentials);
+
+const profiles = join(agent, "custom-providers");
+mkdirSync(profiles);
+for (const [id, api, authMode, baseUrl] of [
+	["fixture-response", "openai-responses", "none", "http://127.0.0.1:9/v1"],
+	["fixture-chat", "openai-completions", "key", "http://127.0.0.1:9/v1"],
+	["fixture-messages", "anthropic-messages", "key", "http://127.0.0.1:9"],
+]) {
+	writeFileSync(join(profiles, id + ".json"), JSON.stringify({
+		id, api, baseUrl, auth: authMode, key: "synthetic-key", models: ["fixture"],
+	}), { mode: 0o600 });
+}
+const withProfiles = await runtime();
+for (const provider of ["fixture-response", "fixture-chat", "fixture-messages"]) {
+	assert.ok(withProfiles.hasConfiguredAuth(provider));
+	assert.ok(withProfiles.getAvailableSnapshot().some(({ provider: id }) => id === provider));
+}
 assert.equal(connections, 0);
 `;
 	const result = spawnSync(process.execPath, ["--import", resolver.href, "--input-type=module", "-e", script, fixture], {
