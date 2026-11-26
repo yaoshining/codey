@@ -16,7 +16,7 @@ jobs:
       - name: Check out fixed Codey candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 17b70d4c0ab3d9e91e11aeef3175c4767e72c667
+          ref: b2f6d6c60722eb8d346070e365f0be5bad92371b
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -55,9 +55,10 @@ jobs:
             else
               probe=("$node_path" --jitless -e 'console.log("node starts")')
             fi
+            cache="$(node -e 'const f=require("fs"); for(const d of ["/System/Cryptexes/OS","/System/Volumes/Preboot/Cryptexes/OS","/private/preboot/Cryptexes/OS"]) {try {const p=f.realpathSync(d+"/System/Library/dyld");if(p.startsWith("/System/Volumes/Preboot/")||p.startsWith("/private/preboot/")){console.log(p);process.exit()}}catch{}} console.log("/System/Library/dyld")')"
             if /usr/bin/env -i PATH=/usr/bin:/bin HOME="$test_dir" TMPDIR="$test_dir" /usr/bin/sandbox-exec \
               -f "$PWD/codey/sandbox/macos/profile.sbpl" -D "WORKSPACE=$test_dir" -D "SCRATCH=$test_dir" \
-              -D "INSTALL=$PWD" -D "NODE=$node_path" -D "TOOLCHAIN=/dev/null" -D "TOOLCHAIN_LINKS=/dev/null" "${probe[@]}"; then
+              -D "INSTALL=$PWD" -D "NODE=$node_path" -D "TOOLCHAIN=/dev/null" -D "TOOLCHAIN_LINKS=/dev/null" -D "DYLD_CACHE=$cache" "${probe[@]}"; then
               echo "Probe passed: $kind"
             else
               echo "Probe failed: $kind, status $?"
