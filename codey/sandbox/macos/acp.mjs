@@ -23,30 +23,46 @@ const select = (id, name, category, currentValue, options) => ({ id, name, categ
 const modelId = (model) => `${model.provider}/${model.id}`;
 const textContent = (text) => ({ type: "text", text });
 
-function configOptions(model, thinking, models) {
+function modelCatalog(models, managedProviders, defaultThinking) {
+	return models.map((model) => ({
+		id: modelId(model),
+		name: managedProviders.has(model.provider) ? model.id : model.name,
+		levels: getSupportedThinkingLevels(model),
+		thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
+	}));
+}
+
+function configOptions(model, thinking, catalog) {
 	if (!model) return [];
 	return [
-		select("model", "Model", "model", modelId(model), models.map((item) => ({ value: modelId(item), name: item.name }))),
+		select("model", "Model", "model", model.id, catalog.map(({ id, name }) => ({ value: id, name }))),
 		select("thinking", "Thinking", "thought_level", thinking,
-			getSupportedThinkingLevels(model).map((level) => ({ value: level, name: level }))),
+			model.levels.map((level) => ({ value: level, name: level }))),
 	];
 }
 
-function setupDiscovery(models, initialModel, defaultThinking) {
+function sessionOptions(model, thinking, catalog) {
+	const options = { configOptions: configOptions(model, thinking, catalog) };
+	if (!model) return options;
+	// T3 reads the v1 compatibility catalog's per-model metadata even when its
+	// learned options are stale. The session config still drives model selection.
+	return { ...options, models: {
+		currentModelId: model.id,
+		availableModels: catalog.map((entry) => ({
+			modelId: entry.id,
+			name: entry.name,
+			_meta: {
+				reasoningEfforts: entry.levels.map((value) => ({ value, label: value })),
+				reasoningEffort: entry.id === model.id ? thinking : entry.thinking,
+			},
+		})),
+	} };
+}
+
+function setupDiscovery(catalog, initialModel) {
 	// Keep only metadata and an ephemeral ID. The probe has no AgentSession or workspace handle.
-	const catalog = models.map((model) => ({
-		id: modelId(model),
-		levels: getSupportedThinkingLevels(model),
-		thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
-		name: model.name,
-	}));
 	const byId = new Map(catalog.map((item) => [item.id, item]));
 	let state;
-	const options = () => ({ configOptions: [
-		select("model", "Model", "model", state.model.id, catalog.map(({ id, name }) => ({ value: id, name }))),
-		select("thinking", "Thinking", "thought_level", state.thinking,
-			state.model.levels.map((level) => ({ value: level, name: level }))),
-	] });
 	return (method, params) => {
 		switch (method) {
 			case "session/new": {
@@ -59,7 +75,7 @@ function setupDiscovery(models, initialModel, defaultThinking) {
 				const model = (initialModel && byId.get(modelId(initialModel))) ?? catalog[0];
 				if (!model) throw new RequestError("No model available. Sign in with /login in ordinary Codey and refresh this provider.", -32000);
 				state = { id: randomUUID(), model, thinking: model.thinking };
-				return { sessionId: state.id, ...options() };
+				return { sessionId: state.id, ...sessionOptions(model, state.thinking, catalog) };
 			}
 			case "session/set_config_option": {
 				if (!state || params.sessionId !== state.id) throw new RequestError("Unknown Codey ACP discovery session.");
@@ -69,7 +85,7 @@ function setupDiscovery(models, initialModel, defaultThinking) {
 				} else if (params.configId === "thinking" && state.model.levels.includes(params.value)) {
 					state.thinking = params.value;
 				} else throw new RequestError("Configuration option or value is unavailable.");
-				return options();
+				return { configOptions: configOptions(state.model, state.thinking, catalog) };
 			}
 			case "session/delete":
 				if (!state || params.sessionId !== state.id) throw new RequestError("Unknown Codey ACP discovery session.");
@@ -103,7 +119,7 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 	let initialized = false;
 	let closing = false;
 	let discovery;
-	let workspace, runtime, model, createSession, open;
+	let workspace, runtime, model, createSession, open, managedProviders, defaultThinkingLevel;
 	let active;
 	let pending;
 	let turn;
@@ -136,8 +152,12 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 		return runtime.getAvailableSnapshot();
 	}
 
-	function config(session) {
-		return configOptions(session.model, session.thinkingLevel, available());
+	function config(session, includeCatalog = false) {
+		const catalog = modelCatalog(available(), managedProviders, defaultThinkingLevel);
+		const current = session.model && catalog.find(({ id }) => id === modelId(session.model));
+		return includeCatalog
+			? sessionOptions(current, session.thinkingLevel, catalog)
+			: { configOptions: configOptions(current, session.thinkingLevel, catalog) };
 	}
 
 	function checkedSession(params) {
@@ -252,9 +272,10 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			const prepared = await prepare(metadataOnly, startup.signal);
 			startup.signal.throwIfAborted();
 			if (metadataOnly) {
-				discovery = setupDiscovery(prepared.runtime.getAvailableSnapshot(), prepared.model, prepared.defaultThinkingLevel);
+				const catalog = modelCatalog(prepared.runtime.getAvailableSnapshot(), prepared.managedProviders, prepared.defaultThinkingLevel);
+				discovery = setupDiscovery(catalog, prepared.model);
 			} else {
-				({ workspace, runtime, model, createSession } = prepared);
+				({ workspace, runtime, model, createSession, managedProviders, defaultThinkingLevel } = prepared);
 				open = sandboxAcpSessions(home, workspace);
 			}
 			return {
@@ -272,13 +293,13 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			case "session/new":
 				checkSetup(params);
 				await attach();
-				return { sessionId: active.id, configOptions: config(active.session) };
+				return { sessionId: active.id, ...config(active.session, true) };
 			case "session/load":
 				checkSetup(params);
 				if (typeof params.sessionId !== "string" || !params.sessionId) throw new RequestError("A session ID is required.");
 				await attach(params.sessionId);
 				replay();
-				return { configOptions: config(active.session) };
+				return config(active.session, true);
 			case "session/set_config_option": {
 				const session = checkedSession(params);
 				if (params.configId === "model") {
@@ -288,7 +309,7 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 				} else if (params.configId === "thinking" && session.getAvailableThinkingLevels().includes(params.value)) {
 					session.setThinkingLevel(params.value);
 				} else throw new RequestError("Configuration option or value is unavailable.");
-				return { configOptions: config(session) };
+				return config(session);
 			}
 			case "session/prompt": return prompt(params);
 			default: throw methodNotFound();
