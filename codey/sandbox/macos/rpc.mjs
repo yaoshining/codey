@@ -3,7 +3,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { THINKING_LEVEL_OPTIONS } from "../../../packages/coding-agent/src/core/defaults.ts";
 import { toJsonEvent } from "../../../packages/coding-agent/src/modes/json-event.ts";
 import { serializeJsonLine } from "../../../packages/coding-agent/src/modes/rpc/jsonl.ts";
-import { sandboxRpcSessions } from "./rpc-sessions.mjs";
+import { SandboxRpcResumeError, sandboxRpcSessions } from "./rpc-sessions.mjs";
 
 const maxRequest = 256 * 1024;
 const maxOutput = 16 * 1024 * 1024;
@@ -182,7 +182,10 @@ export async function runSandboxRpc({ workspace, home, runtime, launchPath, ephe
 		try {
 			const result = dispatch(request);
 			if (type === "prompt") return;
-			if (result instanceof Promise) void result.then((data) => respond(id, type, data), () => fail(id, type, "The sandbox RPC operation failed."));
+			if (result instanceof Promise) void result.then((data) => respond(id, type, data), (error) => {
+				const message = error instanceof SandboxRpcResumeError ? error.message : "The sandbox RPC operation failed.";
+				fail(id, type, message);
+			});
 			else respond(id, type, result);
 		} catch (error) {
 			fail(id, type, error.message);

@@ -101,7 +101,7 @@ class Rpc:
         self.send({"id": request_id, "type": command, **fields})
         response = self.until(lambda frame: frame.get("id") == request_id)
         assert response["type"] == "response" and response["command"] == command and response["success"] == succeeds, response
-        return response.get("data")
+        return response.get("data") if succeeds else response["error"]
 
     def __enter__(self):
         return self
@@ -120,7 +120,7 @@ class Rpc:
                 assert code == 0, self.process.stderr.read().decode()
 
 
-def run(binary):
+def run(binary, adapter_fixture=None):
     with tempfile.TemporaryDirectory(prefix="codey-sandbox-rpc-") as temp, ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
         root = Path(temp).resolve()
         home, project, other = (root / name for name in ("home", "project", "other"))
@@ -163,6 +163,18 @@ def run(binary):
             assert all("headers" not in model and "baseUrl" not in model for model in models)
             assert probe.request("get_commands") == {"commands": []}
 
+        # T3 may register a native path, close the process, and come back before the first turn.
+        with Rpc(alias, flags, project, env) as blank:
+            blank_path = blank.request("get_state")["sessionFile"]
+            assert Path(blank_path).is_file()
+            with Rpc(alias, flags, project, env) as contender:
+                error = contender.request("switch_session", sessionPath=blank_path, succeeds=False)
+                assert "other connection" in error, error
+        with Rpc(alias, flags, project, env) as reopened:
+            reopened.request("switch_session", sessionPath=blank_path)
+            assert reopened.request("get_state")["sessionFile"] == blank_path
+            assert reopened.request("get_messages")["messages"] == []
+
         with Rpc(alias, [*flags, "--extension", str(extension)], project, env) as rpc:
             session_path = Path(rpc.request("get_state")["sessionFile"])
             assert session_path.is_relative_to(agent / "sandbox-rpc")
@@ -193,6 +205,7 @@ def run(binary):
             assert Model.requests[0]["model"] == "fixture-two"
             entries = rpc.request("get_entries")
             assert entries["leafId"] and session_path.exists() and session_path.stat().st_mode & 0o077 == 0
+            messages = rpc.request("get_messages")["messages"]
             rpc.request("prompt", message="slow fixture")
             rpc.until(lambda frame: frame.get("assistantMessageEvent", {}).get("delta") == "SLOW_STARTED")
             first = len(rpc.seen)
@@ -208,7 +221,7 @@ def run(binary):
 
         with Rpc(binary, [*flags, "--session", str(session_path)], project, env) as rpc:
             assert rpc.request("get_state")["sessionFile"] == str(session_path)
-            assert rpc.request("get_messages")["messages"]
+            assert rpc.request("get_messages")["messages"][:len(messages)] == messages
             Model.release.clear()
             rpc.request("prompt", message="slow fixture")
             rpc.until(lambda frame: frame.get("assistantMessageEvent", {}).get("delta") == "SLOW_STARTED")
@@ -222,8 +235,16 @@ def run(binary):
                                 env=env, input="", capture_output=True, text=True, timeout=20)
         assert failed.returncode == 1 and not failed.stdout and "Choose a workspace" in failed.stderr, failed
         print("PASS: EOF aborted an active prompt and released its session; same-workspace reopen works and cross-workspace startup fails closed.", flush=True)
+
+        if adapter_fixture:
+            started = len(Model.requests)
+            subprocess.run(["node", adapter_fixture, str(alias), str(project)], check=True, env=env, timeout=110)
+            requests = Model.requests[started:]
+            assert len(requests) == 3, requests
+            assert "t3-fixture-first" in str(requests[1]["messages"])
+            assert "t3-fixture-second" in str(requests[1]["messages"])
         server.shutdown()
 
 
 if __name__ == "__main__":
-    run(str(Path(sys.argv[1]).absolute()))
+    run(str(Path(sys.argv[1]).absolute()), *sys.argv[2:])
