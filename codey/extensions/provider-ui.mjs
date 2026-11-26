@@ -14,19 +14,23 @@ function hostStore(cwd) {
 	return providerStore(home, realpathSync(cwd));
 }
 
-function maskedKey(ui) {
-	return ui.custom((tui, _theme, _keys, done) => {
+function providerInput(ui, title, { initial = "", secret = false } = {}) {
+	return ui.custom((tui, _theme, keys, done) => {
 		const input = new Input();
+		input.setValue(initial);
 		const finish = (value) => { input.setValue(""); done(value); };
 		input.onSubmit = finish;
 		input.onEscape = () => finish(undefined);
 		return {
-			render: (width) => ["API key (masked)", `> ${"*".repeat(Math.min(input.getValue().length, Math.max(0, width - 2)))}`],
+			render: (width) => [truncateToWidth(title, width), ...(secret
+				? [`> ${"*".repeat(Math.min(input.getValue().length, Math.max(0, width - 2)))}`]
+				: input.render(width)),
+				truncateToWidth(`${keys.getKeys("tui.input.submit").join("/")} submit · ${keys.getKeys("tui.select.cancel").join("/")} cancel`, width)],
 			invalidate() {},
 			handleInput(data) { input.handleInput(data); tui.requestRender(); },
 			dispose() { input.setValue(""); },
 		};
-	}, { blocked: { kind: "question", message: "API key" } });
+	}, { blocked: { kind: "question", message: title } });
 }
 
 function picker(ui, catalog, selected) {
@@ -79,7 +83,7 @@ async function chooseModels(ui, initial, profile) {
 			if (selected.length) return selected;
 			ui.notify("Select or enter at least one model ID.", "warning");
 		} else if (action === "Enter model IDs manually") {
-			const input = await ui.input("Model IDs (one ID or a JSON array)", undefined, { initialValue: selected.length ? JSON.stringify(selected) : "" });
+			const input = await providerInput(ui, "Model IDs (one ID or a JSON array)", { initial: selected.length ? JSON.stringify(selected) : "" });
 			if (input === undefined) continue;
 			const data = input.trim();
 			let ids;
@@ -103,7 +107,7 @@ async function chooseModels(ui, initial, profile) {
 
 async function draft(ui, id, previous, action) {
 	if (action === "Replace API key") {
-		const input = await maskedKey(ui);
+		const input = await providerInput(ui, "API key (masked)", { secret: true });
 		if (input === undefined) return;
 		return { ...previous, auth: "key", key: providerKey(input) };
 	}
@@ -112,7 +116,7 @@ async function draft(ui, id, previous, action) {
 	if (protocolLabel === undefined) return;
 	const api = [...protocols].find(([, value]) => value.label === protocolLabel)[0];
 	const title = api === "anthropic-messages" ? "API Base URL (without trailing /v1)" : "API Base URL (include /v1 if required)";
-	const url = await ui.input(title, undefined, { initialValue: previous?.baseUrl });
+	const url = await providerInput(ui, title, { initial: previous?.baseUrl });
 	if (url === undefined) return;
 	const baseUrl = providerUrl(url.trim(), api);
 	const label = await ui.select("Provider authentication", ordered(authentication, previous?.auth));
@@ -122,7 +126,7 @@ async function draft(ui, id, previous, action) {
 	if (auth === "key") {
 		if (previous?.auth === "key" && previous.baseUrl === baseUrl && previous.api === api) profile.key = previous.key;
 		else {
-			const input = await maskedKey(ui);
+			const input = await providerInput(ui, "API key (masked)", { secret: true });
 			if (input === undefined) return;
 			profile.key = providerKey(input);
 		}

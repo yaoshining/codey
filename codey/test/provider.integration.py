@@ -104,7 +104,7 @@ def run(binary):
                 tty.send("\r")
 
             def escape():
-                tty.send("\x1b")
+                tty.send("\x03")
                 time.sleep(.25)
 
             def start(name):
@@ -190,6 +190,29 @@ def run(binary):
             tty.expect_exact("This replaces the saved authentication")
             enter(down=1)
             tty.expect_exact("API key replaced for fixture-chat.")
+            enter("/provider")
+            tty.expect_exact("Edit provider or models")
+            enter(down=1)
+            tty.expect_exact("Choose saved provider")
+            enter()
+            tty.expect_exact("Provider protocol")
+            enter()
+            tty.expect_exact("API Base URL")
+            tty.expect_exact(endpoint + "/chat/v1")
+            enter()
+            tty.expect_exact("Provider authentication")
+            enter()
+            tty.expect_exact("Keep selections and continue")
+            enter(down=1)
+            tty.expect_exact('["first","second"]')
+            tty.send("\x05\x15")
+            time.sleep(.2)
+            enter('["first", "second", "manual alias"]')
+            tty.expect_exact("Keep selections and continue")
+            enter(down=2)
+            tty.expect_exact("Save provider")
+            enter(down=1)
+            tty.expect_exact("Custom provider saved: fixture-chat.")
             enter("/model")
             tty.expect_exact("fixture-responses")
             escape()
@@ -198,14 +221,14 @@ def run(binary):
         for secret in ["fixture-key-original", "fixture-anthropic-key", "fixture-key-rotated"]:
             assert secret not in log.getvalue()
         assert (agent / "models.json").read_text() == original and (agent / "auth.json").read_text() == '{}\n'
-        assert json.loads((profiles / "fixture-chat.json").read_text())["models"] == ["first", "second"]
+        assert json.loads((profiles / "fixture-chat.json").read_text())["models"] == ["first", "second", "manual alias"]
         assert all(path.stat().st_mode & 0o777 == 0o600 for path in profiles.glob("*.json"))
         assert [event[0] for event in Gateway.seen] == ["/chat/v1/models", "/chat/v1/models?after=first", "/responses/v1/models"]
         print("PASS: real /provider TUI, /login, masked keys, cancel/conflict, model discovery with pagination, multi-select, manual fallback, key rotation and /model.", flush=True)
 
         for model, marker in [("fixture-chat/second", "CHAT_OK"), ("fixture-responses/handwritten-response", "RESPONSES_OK"),
                               ("fixture-messages/handwritten-message", "MESSAGES_OK")]:
-            result = subprocess.run([binary, "--no-session", "--model", model, "-p", "fixture prompt"], cwd=project,
+            result = subprocess.run([binary, "--model", model, "-p", "fixture prompt"], cwd=project,
                                     env=env, text=True, capture_output=True, timeout=20)
             assert result.returncode == 0 and marker in result.stdout, (model, result.returncode, result.stdout, result.stderr)
             assert "fixture-key-rotated" not in result.stdout + result.stderr
@@ -214,7 +237,9 @@ def run(binary):
             ("/responses/v1/responses", None, None, "handwritten-response"),
             ("/anthropic/v1/messages", None, "fixture-anthropic-key", "handwritten-message"),
         ], Gateway.seen
-        print("PASS: all three protocols used the expected network path and credential header after restart; no dummy header or reflected key.", flush=True)
+        transcripts = list((agent / "sessions").rglob("*.jsonl"))
+        assert transcripts and all("fixture-key-rotated" not in path.read_text() for path in transcripts)
+        print("PASS: all three protocols used the expected path and credential header after restart; no dummy header or key in output or transcripts.", flush=True)
         if sys.platform == "darwin":
             flags = ["--sandbox", "workspace-write", "--provider", "fixture-responses", "--model", "handwritten-response"]
             with pexpect.spawn(binary, flags, cwd=project, env=env, encoding="utf-8", timeout=25) as sandbox:

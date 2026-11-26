@@ -8,7 +8,7 @@
 
 在普通终端的 Codey 中运行 `/provider`。选择 **Add provider**，输入一个未占用的 provider ID，再选 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages。填网关提供的 Base URL，并独立选择 **API Key** 或 **No authentication**。远程端点需要 HTTPS，使用数字回环地址 `127.0.0.1` 或 `[::1]` 的本地开发服务可以用 HTTP。远程 API key 只发往该连接的获准端点。
 
-可以选择 **Discover via the model catalog** 并确认一次目录请求。结果支持搜索和多选，屏幕底部显示切换选中与完成的快捷键。列表只表示目录公布的模型 ID。端点没有目录、目录请求失败或想追加别名时，选择 **Enter model IDs manually**。向导不会发送聊天请求。保存后用 `/model` 选择；若目录还在刷新，可执行一次 `/reload`。
+可以选择 **Discover via the model catalog** 并确认一次目录请求。结果支持搜索和多选，屏幕底部显示切换选中与完成的快捷键。列表只表示目录公布的模型 ID。端点没有目录、目录请求失败或想追加别名时，选择 **Enter model IDs manually**，填单个 ID 或 JSON 数组，例如 `["model-a", "model-b"]`。向导不会发送聊天请求。保存后用 `/model` 选择；若目录还在刷新，可执行一次 `/reload`。
 
 用 **Edit provider or models** 修改端点、协议、认证或模型列表，用 **Replace API key** 换密钥。端点或协议变更时，填入新连接的密钥。保存前会显示修改范围，取消时不会写入。向导管理的配置和掩码录入的密钥保存在默认宿主目录 `~/.codey/agent/custom-providers/`，其中每个文件只供当前用户访问。`models.json` 和 `/login` 的标准凭据文件照旧。使用 `/provider` 管理这些连接的密钥。
 
