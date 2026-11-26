@@ -1,6 +1,6 @@
 // Lightweight terminal host for the opt-in macOS sandbox. No Pi CLI discovery.
 import { randomBytes } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -10,13 +10,14 @@ import { findInitialModel } from "../../../packages/coding-agent/src/core/model-
 import { createAgentSession } from "../../../packages/coding-agent/src/core/sdk.ts";
 import { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
-import { styleReviewMarker } from "../../branding.mjs";
+import { styleInfo, styleReviewMarker } from "../../branding.mjs";
 import { reviewSystemPrompt } from "../../extensions/review.mjs";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
 import { projectDomains } from "./project-domains.mjs";
 import { openSeatbelt } from "./seatbelt.mjs";
 import { toolDefinitions } from "./tools.mjs";
+import { worktreeMenu } from "./worktree-menu.mjs";
 
 const help = `Usage: codey --sandbox workspace-write [--workspace <directory>] [--provider <name> --model <id>]
        codey --sandbox workspace-write [--workspace <directory>] --list-domains
@@ -26,7 +27,7 @@ const help = `Usage: codey --sandbox workspace-write [--workspace <directory>] [
 Open an interactive macOS session using the current files. Shell and file tools
 run offline in Seatbelt. A model can request one HTTPS read for your approval.
 Model requests run on the host.
-Supported terminal commands: /review, /help, /quit, !command, !!command.`;
+Supported terminal commands: /review, /worktree, /help, /quit, !command, !!command.`;
 const loginGuidance = "Exit with /quit, run regular codey and use /login there, then reopen this sandbox.";
 const noModel = `No models available. ${loginGuidance}`;
 
@@ -34,15 +35,13 @@ function display(value) {
 	return stripVTControlCharacters(String(value)).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 }
 
-function terminalApproval(input, workspace) {
-	const closed = new AbortController();
-	input.once("close", () => closed.abort());
+function terminalApproval(input, workspace, closed) {
 	let pending = false;
 	return async (url, signal) => {
-		if (pending || closed.signal.aborted || signal?.aborted) return false;
+		if (pending || closed.aborted || signal?.aborted) return false;
 		pending = true;
 		const answer = `approve ${randomBytes(4).toString("hex")}`;
-		const signals = [closed.signal, AbortSignal.timeout(30_000)];
+		const signals = [closed, AbortSignal.timeout(30_000)];
 		if (signal) signals.push(signal);
 		const decision = AbortSignal.any(signals);
 		try {
@@ -116,12 +115,13 @@ async function terminal() {
 	const workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
 	if (!lstatSync(workspace).isDirectory()) throw new Error("The workspace must be a directory.");
 	const home = realpathSync(homedir());
-	const sandbox = await openSeatbelt(workspace, home);
+	const hostDir = mkdtempSync("/private/tmp/codey-sandbox-model-");
 	let runtime;
-	let session;
 	let input;
+	let initial;
 	try {
-		const host = await hostModel(home, workspace, sandbox.hostDir);
+		initial = await openSeatbelt(workspace, home);
+		const host = await hostModel(home, workspace, hostDir);
 		runtime = host.runtime;
 		if (host.warning) console.error(host.warning);
 		let model = values.provider && runtime.getModel(values.provider, values.model);
@@ -136,31 +136,40 @@ async function terminal() {
 			});
 			model = selection.model;
 		}
-		const settings = SettingsManager.inMemory({ defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true });
-		const customTools = toolDefinitions(workspace).map((definition) => ({
-			...definition,
-			execute: async (_id, args, signal) => {
-				const { content, isError } = await sandbox.execute(definition.name, args, signal);
-				return { content, details: undefined, isError };
-			},
-		}));
 		input = createInterface({ input: process.stdin, output: process.stdout, prompt: "codey-sandbox> " });
-		customTools.push(httpsReadTool(terminalApproval(input, workspace), projectDomains(home, workspace).has));
-		const result = await createAgentSession({
-			cwd: workspace, agentDir: host.agentDir, modelRuntime: runtime, model: model || undefined,
-			settingsManager: settings, resourceLoader: emptyResources(), sessionManager: SessionManager.inMemory(workspace),
-			tools: customTools.map(({ name }) => name), customTools,
-		});
-		session = result.session;
+		const closed = new AbortController();
+		input.once("close", () => closed.abort());
+		function createSession(cwd, sandbox, current) {
+			const settings = SettingsManager.inMemory({ defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true });
+			const customTools = toolDefinitions(cwd).map((definition) => ({
+				...definition,
+				execute: async (_id, args, signal) => {
+					const { content, isError } = await sandbox.execute(definition.name, args, signal);
+					return { content, details: undefined, isError };
+				},
+			}));
+			customTools.push(httpsReadTool(terminalApproval(input, cwd, closed.signal), projectDomains(home, cwd).has));
+			const manager = SessionManager.inMemory(cwd);
+			const sessionManager = current ? SessionManager.inMemory(cwd, undefined, [
+				manager.getHeader(), ...structuredClone(current.sessionManager.getBranch()),
+			]) : manager;
+			return createAgentSession({
+				cwd, agentDir: host.agentDir, modelRuntime: runtime, model: model || undefined,
+				settingsManager: settings, resourceLoader: emptyResources(), sessionManager,
+				tools: customTools.map(({ name }) => name), customTools,
+			});
+		}
+		const { session } = await createSession(workspace, initial);
+		const state = { workspace, sandbox: initial, session };
+		initial = undefined;
 		// The SDK's Agent can expose a placeholder even when model selection returned nothing.
-		await readCommands(workspace, session, sandbox, runtime, model, input);
+		await readCommands(state, home, runtime, model, input, createSession);
 	} finally {
 		input?.close();
-		session?.dispose();
 		try {
 			await runtime?.settleCredentialWrites();
 		} finally {
-			sandbox.close();
+			try { initial?.close(); } finally { rmSync(hostDir, { recursive: true, force: true }); }
 		}
 	}
 }
@@ -202,21 +211,23 @@ async function reviewChanges(sandbox, runtime, model, signal) {
 	}
 }
 
-async function readCommands(workspace, session, sandbox, runtime, model, input) {
-	console.log(`Codey macOS sandbox (workspace-write): ${display(workspace)}`);
+async function readCommands(state, home, runtime, model, input, createSession) {
+	const root = state.workspace;
+	console.log(`Codey macOS sandbox (workspace-write): ${display(root)}`);
 	if (model) console.log(`Model: ${display(model.provider)}/${display(model.id)}`);
 	else console.error(noModel);
 	console.log("Shell and file tools are offline. HTTPS reads require approval or a project domain grant. Type /help or /quit.");
 	let active;
+	input.once("close", () => active?.abort());
 	input.on("SIGINT", () => {
 		if (active) {
 			active.abort();
-			void session.abort();
+			void state.session.abort();
 		} else {
 			input.close();
 		}
 	});
-	const unsubscribe = session.subscribe((event) => {
+	function onEvent(event) {
 		if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 			process.stdout.write(display(event.assistantMessageEvent.delta));
 		}
@@ -224,7 +235,34 @@ async function readCommands(workspace, session, sandbox, runtime, model, input) 
 			if (event.message.errorMessage) console.error(display(event.message.errorMessage));
 			process.stdout.write("\n");
 		}
-	});
+	}
+	let unsubscribe = state.session.subscribe(onEvent);
+	async function switchWorkspace(request, signal) {
+		request.verify();
+		const sandbox = await openSeatbelt(request.path, home);
+		let next;
+		try {
+			signal.throwIfAborted();
+			request.verify();
+			next = (await createSession(request.path, sandbox, request.keepHistory ? state.session : undefined)).session;
+			signal.throwIfAborted();
+		} catch (error) {
+			try { next?.dispose(); } finally { sandbox.close(); }
+			throw error;
+		}
+		const old = { ...state };
+		unsubscribe();
+		state.workspace = request.path;
+		state.sandbox = sandbox;
+		state.session = next;
+		unsubscribe = next.subscribe(onEvent);
+		try {
+			try { old.session.dispose(); } finally { old.sandbox.close(); }
+		} catch {
+			console.error("Could not finish cleaning up the previous sandbox.");
+		}
+		console.log(styleInfo(`• Working directory changed to: ${display(request.path)}`));
+	}
 	try {
 		input.prompt();
 		for await (const line of input) {
@@ -233,27 +271,36 @@ async function readCommands(workspace, session, sandbox, runtime, model, input) 
 			active = new AbortController();
 			try {
 				if (text === "/help") console.log(help);
-				else if (text === "/review") await reviewChanges(sandbox, runtime, model, active.signal);
+				else if (text === "/review") await reviewChanges(state.sandbox, runtime, model, active.signal);
 				else if (/^\/review\s/.test(text)) console.log("Usage: /review (current changes only)");
+				else if (text === "/worktree") {
+					const request = await worktreeMenu(input, root, home, state.workspace, active.signal);
+					if (request) {
+						try { await switchWorkspace(request, active.signal); }
+						catch (error) { throw new Error(`Could not switch to ${request.path}. ${error.message}`); }
+					}
+				}
+				else if (/^\/worktree\s/.test(text)) console.log("Usage: /worktree");
 				else if (text === "/login" || text.startsWith("/login ")) console.log(loginGuidance);
 				else if (text.startsWith("/") || text.startsWith("@")) console.log("This command or attachment is unavailable in the macOS sandbox.");
 				else if (text.startsWith("!")) {
 					const excludeFromContext = text.startsWith("!!");
 					const command = text.slice(excludeFromContext ? 2 : 1).trim();
 					if (command) {
-						const result = await sandbox.execute("bash", { command }, active.signal);
+						const result = await state.sandbox.execute("bash", { command }, active.signal);
 						const output = result.content.map((entry) => entry.text).join("\n");
 						console.log(display(output));
-						session.recordBashResult(command, { output, exitCode: result.exitCode ?? 0, cancelled: false, truncated: false }, { excludeFromContext });
+						state.session.recordBashResult(command, { output, exitCode: result.exitCode ?? 0, cancelled: false, truncated: false }, { excludeFromContext });
 					}
 				} else if (text) {
-					if (model) await session.prompt(text, { expandPromptTemplates: false });
+					if (model) await state.session.prompt(text, { expandPromptTemplates: false });
 					else console.error(noModel);
 				}
 			} catch (error) {
 				if (/^(Authentication failed for |No API key found for )/.test(error.message) && model) {
 					console.error(`Authentication is unavailable for "${display(model.provider)}". ${loginGuidance}`);
-				} else console.error(display(error.message));
+				} else if (active.signal.aborted && text === "/worktree") console.log("Worktree action canceled.");
+				else console.error(display(error.message));
 			} finally {
 				active = undefined;
 			}
@@ -262,7 +309,9 @@ async function readCommands(workspace, session, sandbox, runtime, model, input) 
 	} finally {
 		unsubscribe();
 		input.close();
-		await session.abort();
+		try { await state.session.abort(); } finally {
+			try { state.session.dispose(); } finally { state.sandbox.close(); }
+		}
 	}
 }
 

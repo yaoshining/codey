@@ -12,7 +12,7 @@ const reviewRules = fileURLToPath(new URL("./review.sbpl", import.meta.url));
 const resolver = pathToFileURL(join(install, "packages/coding-agent/src/experimental/source-resolver.ts")).href;
 const outputLimit = 1024 * 1024;
 
-function systemDyldCache() {
+export function systemDyldCache() {
 	for (const prefix of ["/System/Cryptexes/OS", "/System/Volumes/Preboot/Cryptexes/OS", "/private/preboot/Cryptexes/OS"]) {
 		try {
 			const path = realpathSync(join(prefix, "System/Library/dyld"));
@@ -29,15 +29,28 @@ export function contains(root, path) {
 	return child === "" || (!isAbsolute(child) && child !== ".." && !child.startsWith("../"));
 }
 
-function reviewGit() {
+export function appleGit() {
 	const path = realpathSync(execFileSync("/usr/bin/xcrun", ["--find", "git"], {
 		cwd: "/", env: { HOME: "/var/empty", PATH: "/usr/bin:/bin" }, encoding: "utf8",
 		timeout: 5000, maxBuffer: 4096, stdio: ["ignore", "pipe", "ignore"],
 	}).trim());
 	if (!/^\/(?:Applications\/[^/]+\.app\/Contents\/Developer\/(?:Toolchains\/[^/]+\/)?|Library\/Developer\/CommandLineTools\/)usr\/bin\/git$/.test(path)) {
-		throw new Error("Review needs Git from Xcode or the Apple Command Line Tools.");
+		throw new Error("This feature needs Git from Xcode or the Apple Command Line Tools.");
 	}
 	return path;
+}
+
+// The outer managed path itself contains .codey. Keep all other protected names
+// and deny new .codey directories even inside the selected managed checkout.
+export function managedProfile() {
+	return readFileSync(profile, "utf8").replace("|[.][cC][oO][dD][eE][yY]", "") + `
+(deny file-read-data file-write*
+  (require-all
+    (regex #"/[.][cC][oO][dD][eE][yY](/|$)")
+    (require-not (subpath (param "WORKSPACE")))))
+(deny file-read* file-write*
+  (regex #"/[.][cC][oO][dD][eE][yY]/.*/[.][cC][oO][dD][eE][yY](/|$)"))
+`;
 }
 
 export async function openSeatbelt(workspace, hostHome) {
@@ -93,14 +106,19 @@ export async function openSeatbelt(workspace, hostHome) {
 		// Pass an empty config to the worker and its children, without changing the host.
 		OPENSSL_CONF: "/dev/null",
 	};
-	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, name, args, signal });
+	// Only a canonical managed checkout at the expected depth can use the managed profile.
+	const pool = join(hostHome, ".codey", "worktrees");
+	const bucket = dirname(workspace);
+	const managed = dirname(bucket) === pool && /^task-[A-Za-z0-9]{6}$/.test(bucket.slice(pool.length + 1)) && gitStat?.isFile();
+	const workerProfile = managed ? join(hostDir, "managed.sbpl") : profile;
+	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, policy: workerProfile, name, args, signal });
 	let reviewPolicy;
 	async function review(signal) {
 		if (!reviewPolicy) {
 			// Resolve the system tool without Git or project discovery on the host.
-			const git = reviewGit();
+			const git = appleGit();
 			const path = join(hostDir, "review.sbpl");
-			writeFileSync(path, `${readFileSync(profile, "utf8")}\n${readFileSync(reviewRules, "utf8")}`, { mode: 0o600, flag: "wx" });
+			writeFileSync(path, `${readFileSync(workerProfile, "utf8")}\n${readFileSync(reviewRules, "utf8")}`, { mode: 0o600, flag: "wx" });
 			reviewPolicy = {
 				path, git, params: { ...params, REVIEW_GIT: git, REVIEW_GIT_LIB: join(dirname(dirname(git)), "lib"), REVIEW_GIT_DIR: gitFile },
 			};
@@ -120,6 +138,7 @@ export async function openSeatbelt(workspace, hostHome) {
 	}
 	try {
 		mkdirSync(env.HOME, { mode: 0o700 });
+		if (managed) writeFileSync(workerProfile, managedProfile(), { flag: "wx", mode: 0o600 });
 		const hostProbe = join(hostDir, "denied-probe");
 		writeFileSync(hostProbe, "sandbox probe", { mode: 0o600 });
 		if (readFileSync(hostProbe, "utf8") !== "sandbox probe") throw new Error("Host preflight file is unreadable.");

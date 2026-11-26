@@ -28,7 +28,9 @@ export function styleReviewMarker(text, theme) {
 }
 
 export function styleInfo(text, theme) {
-	return colorEnabled() ? theme.style(text, { fg: palette.info[theme.appearance] }) : text;
+	if (!colorEnabled()) return text;
+	const style = { fg: palette.info[theme?.appearance ?? "dark"] };
+	return theme ? theme.style(text, style) : styleText(text, style, "truecolor");
 }
 
 function logoLines(mode) {
