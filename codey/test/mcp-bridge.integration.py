@@ -108,7 +108,7 @@ def main():
             terminal.expect_exact("Add Node bridge")
             enter(terminal)
             terminal.expect_exact("New MCP bridge name")
-            enter(terminal, "bridge-live")
+            enter(terminal, "Bridge-Live")
             terminal.expect_exact("HTTPS MCP endpoint")
             enter(terminal, base + "/bridge")
             terminal.expect_exact("Choose a verified public PEM for this endpoint")
@@ -130,6 +130,12 @@ def main():
             terminal.expect_exact("An MCP server or bridge already uses that name.")
             enter(terminal, "/mcp bridge add")
             terminal.expect_exact("New MCP bridge name")
+            enter(terminal, "BRIDGE_live")
+            terminal.expect_exact("An MCP server or bridge already uses that name.")
+            enter(terminal, "/mcp bridge list")
+            terminal.expect_exact(f"Bridge-Live: {base}/bridge")
+            enter(terminal, "/mcp bridge add")
+            terminal.expect_exact("New MCP bridge name")
             enter(terminal, "system-default")
             terminal.expect_exact("HTTPS MCP endpoint")
             enter(terminal, base + "/default")
@@ -144,11 +150,12 @@ def main():
             terminal.expect_exact("MCP bridge saved.")
             quit_terminal(terminal)
         bridge = saved / "bridge-live.json"
-        assert json.loads(bridge.read_text())["url"] == base + "/bridge"
+        profile = json.loads(bridge.read_text())
+        assert profile["name"] == "Bridge-Live" and profile["url"] == base + "/bridge"
         assert "bridge-fixture-key" not in bridge.read_text()
         assert bridge.stat().st_mode & 0o777 == 0o600
         assert json.loads((saved / "system-default.json").read_text())["pem"] == ""
-        print("PASS: real /mcp bridge TUI required explicit PEM confirmation and saved one private entry without the token.", flush=True)
+        print("PASS: real /mcp bridge TUI preserved display case, blocked case and namespace collisions, and saved a private entry without the token.", flush=True)
 
         def seed(name, endpoint, pem, token=""):
             path = saved / f"{name}.json"
@@ -164,10 +171,10 @@ def main():
                            env=env, encoding="utf-8", timeout=25) as rpc:
             rpc.setecho(False)
             rpc.sendline(json.dumps({"id": "mcp", "type": "prompt", "message": "/mcp"}))
-            rpc.expect_exact("bridge-live: connected")
+            rpc.expect_exact("Bridge-Live: connected")
             report = rpc.before + rpc.after + rpc.readline()
             assert "bridge-fixture-key" not in report, report
-            assert "bridge-live: connected, 1 tools" in report and "direct-http: connected, 1 tools" in report, report
+            assert "Bridge-Live: connected, 1 tools" in report and "direct-http: connected, 1 tools" in report, report
             assert "system-default: connected, 1 tools" in report, report
             assert "MCP bridge TLS identity mismatch" in report and "MCP bridge TLS certificate is untrusted" in report, report
             assert "MCP bridge authentication failed." in report and "Run /mcp bridge login" in report, report

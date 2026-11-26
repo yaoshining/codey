@@ -8,7 +8,7 @@
 
 普通 Codey 默认使用 Streamable HTTP 直连和 Node 的正常 TLS 验证，无需单独提供证书。需要本地 Node 子进程时，在项目目录启动普通 `codey`，输入 `/mcp bridge`，选择 `Add Node bridge`。也可以直接输入 `/mcp bridge add`。
 
-1. 输入未被占用的服务名和完整 HTTPS MCP URL，例如 `https://mcp.example.org/mcp`。
+1. 输入未被占用的服务名和完整 HTTPS MCP URL，例如 `https://mcp.example.org/mcp`。服务名支持 ASCII 大小写，界面保留录入的拼写。仅大小写不同，或仅连字符与下划线不同的名称会冲突。
 2. 默认选 **Use Node and system trust**，无需证书文件。只有默认验证报不受信任时，才需要选 **Choose a verified public PEM for this endpoint**。使用管理员提供的公共 CA 或自签名服务证书，核对确认页上的 URL 和经可信渠道取得的 SHA-256 指纹。
 3. 如果管理员给了适用于该端点的 Bearer token，可以填写启动 Codey 的环境变量名。没有 token 时留空。不要把 token 或私钥填进向导。
 4. 确认后用 `/reload` 或重启普通 Codey，再打开 `/mcp` 查看。一个服务只对应一个 HTTPS 端点，证书链、有效期和主机名或 IP SAN 都会校验。桥接不跟随重定向。
@@ -17,9 +17,11 @@
 
 ### 为桥接服务登录 OAuth
 
-如果桥接报 `401`，对需要 OAuth 的服务请在添加时把 Bearer token 环境变量留空。运行普通终端的 `/mcp bridge login`，选择该桥接并确认发现。核对服务地址、发行方、授权范围，以及浏览器、动态注册和令牌端点，确认后才会注册并用系统浏览器打开登录。浏览器完成同意后回到 Codey，再用 `/reload` 或重启；用 `/mcp` 查看连接。登录不需要静态 client ID 或 secret。取消可以在等待浏览器时完成。
+如果桥接报 `401`，对需要 OAuth 的服务请在添加时把 Bearer token 环境变量留空。运行普通终端的 `/mcp bridge login`，选择该桥接。当元数据、唯一发行方和登录端点与 MCP 服务同源时，Codey 会直接打开系统浏览器。浏览器完成同意后回到 Codey，再用 `/reload` 或重启。用 `/mcp` 查看连接。登录不需要静态 client ID 或 secret，等待浏览器时可以取消。
 
-本地回调只监听 `127.0.0.1`，使用 PKCE 并验证 `state`。保存的令牌与桥接名称、HTTPS 服务地址和所选信任选项绑定。OAuth issuer 和令牌端点可能位于不同 HTTPS origin，界面会要求确认。显式选定的私有 CA 只在原服务 origin 的 Node 客户端生效。桥接的正常验证读取 Node 和系统信任，浏览器使用自身的证书信任。浏览器出现证书异常时先修复该地址的信任。Codey 不修改信任库或导入其他客户端的配置，也不跟随 OAuth HTTP 重定向。
+如果服务列出多个发行方，Codey 会要求选择。跨源读取元数据需要单独同意，读取时不发送 OAuth 凭据。跨源浏览器页面、客户端注册或令牌端点会集中列出并要求批准。这个选择只用于此次登录，保存的授权只能用其绑定的端点刷新。本地回调只监听 `127.0.0.1`，使用 PKCE 并验证 `state`。保存的令牌与桥接名称、HTTPS 服务地址和所选信任选项绑定。已有桥接、CA 和令牌可继续使用。
+
+显式选定的私有 CA 只在原服务 origin 的 Node 客户端生效。桥接的正常验证读取 Node 和系统信任，浏览器使用自身的证书信任。浏览器出现证书异常时先修复该地址的信任。Codey 不修改信任库或导入其他客户端的配置，也不跟随 OAuth HTTP 重定向。
 
 `/mcp bridge logout` 清除该桥接的本地登录，随后 `/reload` 或重启关闭旧会话。这个操作不做服务端撤销。独立 Bearer 和普通直连 `/mcp` 保留原有路径。Pomodoist 官方文档描述了这种动态注册登录方式，Codey 当前用合成服务验证，尚未连接真实实例。 [Pomodoist 自托管说明](https://pomodoist.com/docs/self-hosting/#connect-an-mcp-client)
 
