@@ -52,7 +52,7 @@ def main(binary):
 
             def command(line, expected):
                 send(line)
-                tty.expect_exact(expected)
+                assert tty.expect_exact([expected, prompt]) == 0, tty.before
                 tty.expect_exact(prompt)
 
             def new(option):
@@ -87,10 +87,14 @@ def main(binary):
             assert not any(t["function"]["name"] == "worktree" for t in FakeModel.requests[-1]["tools"])
             (first / ".codey").mkdir()
             (first / ".codey/protected").write_text("synthetic marker")
+            nested = first / "folder/.CoDeY"
+            nested.mkdir(parents=True)
+            (nested / "protected").write_text("nested synthetic marker")
             source_q = shlex.quote(str(source))
             command(f"!![[ $(/bin/pwd) == {shlex.quote(str(first))} ]] && "
                     f"! /bin/cat {source_q}/tracked 2>/dev/null && ! /usr/bin/touch {source_q}/denied 2>/dev/null && "
-                    "! /bin/cat .codey/protected 2>/dev/null && ! /bin/cat .git 2>/dev/null && printf 'BOUNDARY_''OK'", "BOUNDARY_OK")
+                    "! /bin/cat .codey/protected 2>/dev/null && ! /bin/cat folder/.CoDeY/protected 2>/dev/null && "
+                    "! /bin/cat .git 2>/dev/null && printf 'BOUNDARY_''OK'", "BOUNDARY_OK")
             assert not (source / "denied").exists()
             command("/review", "Linked worktrees are unavailable.")
             send("request granted read")
@@ -110,6 +114,9 @@ def main(binary):
             tty.expect_exact(prompt)
             (first / ".codey/protected").unlink()
             (first / ".codey").rmdir()
+            (nested / "protected").unlink()
+            nested.rmdir()
+            nested.parent.rmdir()
 
             second = new(2)
             command("FRESH_CHAT", "FAKE_MODEL_FINISHED")

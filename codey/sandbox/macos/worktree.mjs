@@ -46,7 +46,7 @@ export function sandboxWorktrees(root, home) {
 
 	function run(scratch, args, { target = scratch, metadata = common, mutation } = {}) {
 		const profile = join(scratch, "git.sbpl");
-		writeFileSync(profile, `${managedProfile(target)}\n${rules}${mutation ? "" : '\n(deny file-write* (subpath (param "WORKSPACE")))\n'}`, { mode: 0o600 });
+		writeFileSync(profile, `${managedProfile()}\n${rules}${mutation ? "" : '\n(deny file-write* (subpath (param "WORKSPACE")))\n'}`, { mode: 0o600 });
 		const disabled = join(scratch, "disabled");
 		const params = {
 			WORKSPACE: target, SCRATCH: scratch, INSTALL: disabled, NODE: disabled, TOOLCHAIN: disabled, TOOLCHAIN_LINKS: disabled,

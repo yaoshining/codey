@@ -42,10 +42,15 @@ export function appleGit() {
 
 // The outer managed path itself contains .codey. Keep all other protected names
 // and deny new .codey directories even inside the selected managed checkout.
-export function managedProfile(workspace) {
-	const escaped = workspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return readFileSync(profile, "utf8").replace("|[.][cC][oO][dD][eE][yY]", "") +
-		`\n(deny file-read* file-write* (regex #${JSON.stringify(`^${escaped}/(.*/)?[.][cC][oO][dD][eE][yY](/|$)`)}))\n`;
+export function managedProfile() {
+	return readFileSync(profile, "utf8").replace("|[.][cC][oO][dD][eE][yY]", "") + `
+(deny file-read-data file-write*
+  (require-all
+    (regex #"/[.][cC][oO][dD][eE][yY](/|$)")
+    (require-not (regex #"/[.][cC][oO][dD][eE][yY]/worktrees/task-[A-Za-z0-9]{6}/[^/]+(/|$)"))))
+(deny file-read* file-write*
+  (regex #"/[.][cC][oO][dD][eE][yY]/worktrees/task-[A-Za-z0-9]{6}/[^/]+(/[^/]+)*/[.][cC][oO][dD][eE][yY](/|$)"))
+`;
 }
 
 export async function openSeatbelt(workspace, hostHome) {
@@ -133,7 +138,7 @@ export async function openSeatbelt(workspace, hostHome) {
 	}
 	try {
 		mkdirSync(env.HOME, { mode: 0o700 });
-		if (managed) writeFileSync(workerProfile, managedProfile(workspace), { flag: "wx", mode: 0o600 });
+		if (managed) writeFileSync(workerProfile, managedProfile(), { flag: "wx", mode: 0o600 });
 		const hostProbe = join(hostDir, "denied-probe");
 		writeFileSync(hostProbe, "sandbox probe", { mode: 0o600 });
 		if (readFileSync(hostProbe, "utf8") !== "sandbox probe") throw new Error("Host preflight file is unreadable.");
