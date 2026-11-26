@@ -207,6 +207,7 @@ async function launch() {
 			});
 		};
 		return { workspace, runtime, model, newSession, defaultThinkingLevel, managedProviders,
+			...(acp ? { runProjectSkill: initial.execute } : {}),
 			createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel) };
 	}
 	try {

@@ -42,6 +42,13 @@ codey worktree delete <id>
 
 Codey 通过 stdio 协商 ACP v1，支持文本流、模型和推理档位、停止对话以及在同一工作目录恢复。ACP 会话与 Pi RPC 和普通 Codey 会话分开保存。使用相同的 provider 和工作目录重新打开已建立的 ACP 聊天即可续接。
 
-在 T3 设置中刷新此 provider，可读取普通 Codey 已配置的模型和每个模型的推理档位。通过 `/provider` 添加的模型在 ACP 列表中直接显示网关模型 ID，例如 `openai/gpt-6.2-sol`，选择仍使用包含 provider 的完整 ID。设置页的探测可以从 T3 服务目录运行，且只返回模型信息。要开始对话，请打开实际项目；工具仍需要在该项目启动 Seatbelt。
+在 T3 设置中刷新此 provider，可读取普通 Codey 已配置的模型和每个模型的推理档位。通过 `/provider` 添加的模型在 ACP 列表中直接显示网关模型 ID，例如 `openai/gpt-6.2-sol`，选择仍使用包含 provider 的完整 ID。设置页从 T3 服务目录探测模型和个人技能名称、描述。要开始对话，请打开实际项目，让 Codey 在该项目启动 Seatbelt。
+
+#### 在 T3 中使用 Codey 技能
+
+- 个人技能放在 `~/.codey/agent/skills/<name>/SKILL.md`。刷新 Local ACP provider 后，在对话框输入 `$` 查找并点选技能。如果 T3 已开启在 `/` 菜单显示技能，也可从那里点选。
+- 项目技能放在所选工作区根目录的 `.agents/skills/<name>/SKILL.md`。在实际项目聊天发送 `$project-skills`，即可在当前对话内列出项目技能，无需请求模型。发送 `$<name>` 使用技能。当前 T3 Local ACP 菜单按 provider 共用，因此菜单只显示个人技能和同一个项目列表入口。
+- `SKILL.md` 的 YAML 头需有 `name` 和 `description`，名称须与目录相同，使用小写 ASCII 字母、数字和连字符，最多 64 字符。`user-invocable: false` 的技能不会列出或加载。个人已列出技能和项目技能同名时使用个人技能。正文在调用时才读取。把 `$<name>` 放在消息开头可传参，如 `$draft-notes 修订第二段`。正文中的 `$ARGUMENTS` 会替换为字面参数。消息中间的 `$<name>` 只选取技能，整条消息仍作为请求。
+- 所选正文随本轮用户消息发送给所选模型。项目内容由已有 Seatbelt 读取，链接文件和链接目录会被跳过。读取限单个 48 KiB 的 `SKILL.md`，菜单最多列 64 项。Codey 不运行动态 shell 模板、钩子、插件或技能脚本，也不会因技能配置额外授权。普通终端和 Pi RPC 的技能机制沿用原有行为。
 
 ACP 接入**不会让模型读到 T3 跨线程引用的正文**。引用以客户端实际传入的文字或 URI 为准，Codey 不打开链接，也不接入 T3 附带的 MCP。若需要本轮模型查看另一条聊天的内容，可把你允许分享的摘录直接贴进当前聊天。后续读取工具需要验证 T3 能否把授权绑定到本轮由用户选中的那一条引用，并限制可返回的数据范围。

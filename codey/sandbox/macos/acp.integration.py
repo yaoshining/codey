@@ -15,6 +15,14 @@ fixtures = runpy.run_path(str(Path(__file__).with_name("rpc.integration.py")))
 Model, Rpc = fixtures["Model"], fixtures["Rpc"]
 args = ["acp", "--sandbox=workspace-write"]
 alias = "litellm/openai/fixture-one"
+
+
+def write_skill(root, name, description, body):
+    folder = root / name
+    folder.mkdir(parents=True)
+    path = folder / "SKILL.md"
+    path.write_text(f"---\nname: {name}\ndescription: {description}\n---\n{body}\n")
+    return path
 alias_levels = ["off", "low", "medium", "high", "xhigh", "max"]
 
 
@@ -84,6 +92,16 @@ def run(binary, t3_fixture=None):
                                       "models": ["openai/fixture-one"],
                                       "reasoningLevels": {"openai/fixture-one": alias_levels[1:]}}))
         profile.chmod(0o600)
+        write_skill(agent / "skills", "personal-notes", "Personal fixture", "PERSONAL_SKILL_BODY $ARGUMENTS")
+        project = workspace / ".agents/skills"
+        write_skill(project, "project-notes", "Project fixture", "PROJECT_SKILL_BODY $ARGUMENTS")
+        write_skill(project, "personal-notes", "Project duplicate", "SHADOW_SKILL_BODY")
+        write_skill(project, "dynamic-notes", "Dynamic fixture", "!`touch dynamic-ran`")
+        write_skill(project, "large-args", "Large expansion fixture", "$ARGUMENTS " * 1000)
+        outside = write_skill(other / ".agents/skills", "remote-notes", "Other workspace", "FOREIGN_SKILL_BODY")
+        (project / "remote-notes").symlink_to(outside.parent, target_is_directory=True)
+        (project / "linked-file").mkdir()
+        (project / "linked-file/SKILL.md").symlink_to(outside)
         (workspace / ".env").write_text("protected")
         marker = other / "fixture"
         marker.write_text("outside")
@@ -126,7 +144,10 @@ def run(binary, t3_fixture=None):
                 probe.request("initialize", protocolVersion=1, clientInfo={"name": "standard"}, succeeds=False)
                 probe.request("session/delete", sessionId=sid)
                 probe.request("session/set_config_option", sessionId=sid, configId="thinking", value="low", succeeds=False)
-                assert not any("method" in frame for frame in probe.seen), probe.seen
+                notices = [frame["params"]["update"] for frame in probe.seen if "method" in frame]
+                assert notices == [{"sessionUpdate": "available_commands_update", "availableCommands": [
+                    {"name": "$personal-notes", "description": "Personal fixture"},
+                ]}], notices
             if directory != str(workspace):
                 with Acp(binary, args, directory, env) as standard:
                     standard.request("initialize", protocolVersion=1, clientInfo={"name": "ordinary-t3-chat"}, succeeds=False)
@@ -155,6 +176,8 @@ def run(binary, t3_fixture=None):
             files = list((agent / "sandbox-acp").glob("*/*.jsonl"))
             assert len(files) == 1 and files[0].name == session_id and files[0].stat().st_mode & 0o777 == 0o600
             assert len(result["configOptions"][0]["options"]) == 3
+            catalog = acp.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
+            assert {item["name"] for item in catalog["params"]["update"]["availableCommands"]} == {"$personal-notes", "$project-skills"}
             model = acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             thinking = model["configOptions"][1]["options"]
             selected = next(option["value"] for option in thinking if option["value"] == "low")
@@ -175,6 +198,19 @@ def run(binary, t3_fixture=None):
             assert not any("id" in frame and "method" in frame for frame in acp.seen)
             assert Model.requests[0]["model"] == "fixture-think" and Model.requests[0]["reasoning_effort"] == "low"
             assert "contents not loaded" in str(Model.requests[0]["messages"])
+            before_skills = len(Model.requests)
+            def skill_prompt(text, succeeds=True):
+                return acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": text}], succeeds=succeeds)
+            assert skill_prompt("$project-skills")["stopReason"] == "end_turn"
+            assert "$project-notes" in str(acp.seen) and "$remote-notes" not in str(acp.seen)
+            for unavailable in ("$remote-notes", "$linked-file", "$dynamic-notes", "$large-args " + "x" * 100):
+                skill_prompt(unavailable, succeeds=False)
+            assert len(Model.requests) == before_skills and not (workspace / "dynamic-ran").exists()
+            assert skill_prompt("$personal-notes literal $(touch skill-ran)")["stopReason"] == "end_turn"
+            assert "PERSONAL_SKILL_BODY literal $(touch skill-ran)" in str(Model.requests[-1]["messages"])
+            assert "SHADOW_SKILL_BODY" not in str(Model.requests[-1]["messages"]) and not (workspace / "skill-ran").exists()
+            assert skill_prompt("Please apply $project-notes here")["stopReason"] == "end_turn"
+            assert "PROJECT_SKILL_BODY" in str(Model.requests[-1]["messages"])
             assert acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": "slow fixture"}])["stopReason"] == "cancelled"
             Model.release.set()
             changed = acp.request("session/set_config_option", sessionId=session_id, configId="model", value=alias)
@@ -200,7 +236,11 @@ def run(binary, t3_fixture=None):
         with Acp(binary, args, other, env) as foreign:
             foreign.initialize()
             foreign.request("session/load", sessionId=session_id, cwd=str(other), mcpServers=[], succeeds=False)
-        assert len(list((agent / "sandbox-acp").glob("*/*.jsonl"))) == 1
+            foreign_id = foreign.request("session/new", cwd=str(other), mcpServers=[])["sessionId"]
+            before_skills = len(Model.requests)
+            foreign.request("session/prompt", sessionId=foreign_id, prompt=[{"type": "text", "text": "$project-notes"}], succeeds=False)
+            assert len(Model.requests) == before_skills
+        assert len(list((agent / "sandbox-acp").glob("*/*.jsonl"))) == 2
         for flags in (["acp"], [*args, "--no-tools"], [*args, "--mode", "rpc"]):
             output = subprocess.run([binary, *flags], input="", text=True, capture_output=True, env=env, cwd=workspace, timeout=15)
             assert output.returncode != 0 and not output.stdout, output
@@ -213,6 +253,8 @@ def run(binary, t3_fixture=None):
             requests = Model.requests[started:]
             assert any(item.get("reasoning_effort") == "low" and "t3-acp-first" in str(item["messages"])
                        and "t3-acp-second" in str(item["messages"]) for item in requests)
+            assert any("PROJECT_SKILL_BODY t3-acp-first" in str(item["messages"]) for item in requests)
+            assert any("PERSONAL_SKILL_BODY t3-acp-second" in str(item["messages"]) for item in requests)
             assert not injected.exists() and Model.probes == 1
         server.shutdown()
 

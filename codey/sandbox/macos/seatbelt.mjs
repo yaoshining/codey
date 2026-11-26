@@ -167,7 +167,7 @@ function runSeatbelt({ workspace, node, params, env, policy = profile, name, arg
 			failure ??= new Error(message);
 			try { process.kill(-child.pid, "SIGKILL"); } catch { /* Process group already exited. */ }
 		};
-		const seconds = name === "ready" ? 15 : name === "review" ? 20 : name === "bash" && Number.isFinite(args.timeout)
+		const seconds = name === "ready" || name === "acp-skills" || name === "acp-skill" ? 15 : name === "review" ? 20 : name === "bash" && Number.isFinite(args.timeout)
 			? Math.min(120, Math.max(1, args.timeout))
 			: 120;
 		const timeout = setTimeout(() => terminate("Seatbelt worker timed out."), seconds * 1000);
