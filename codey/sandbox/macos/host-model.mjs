@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { AuthStorage, FileAuthStorageBackend } from "../../../packages/coding-agent/src/core/auth-storage.ts";
 import { ModelRuntime } from "../../../packages/coding-agent/src/core/model-runtime.ts";
 import { InMemoryCodingAgentModelsStore } from "../../../packages/coding-agent/src/core/models-store.ts";
+import { providerFromProfile } from "../../extensions/provider-protocols.mjs";
+import { providerStore } from "../../extensions/provider-store.mjs";
 import { contains } from "./seatbelt.mjs";
 
 export function parseData(raw, label) {
@@ -88,5 +90,19 @@ export async function hostModel(home, workspace, hostDir) {
 	// The local refresh restores cached catalogs and populates the auth/availability
 	// snapshot consumed by the SDK's initial model selection.
 	const runtime = await ModelRuntime.create({ credentials, modelsPath, modelsStore, allowModelNetwork: false });
-	return { runtime, agentDir, settings, warning };
+	const warnings = [warning].filter(Boolean);
+	try {
+		const saved = providerStore(home, workspace)?.list();
+		if (saved) {
+			warnings.push(...saved.errors);
+			let registered = false;
+			for (const { profile } of saved.entries) {
+				if (runtime.getProvider(profile.id)) continue;
+				runtime.registerNativeProvider(providerFromProfile(profile));
+				registered = true;
+			}
+			if (registered) await runtime.refresh({ allowNetwork: false });
+		}
+	} catch { warnings.push("Could not load the private Codey provider directory."); }
+	return { runtime, agentDir, settings, warning: warnings.join("\n") || undefined };
 }

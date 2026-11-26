@@ -22,6 +22,7 @@
 | `codey --pi-version` | 查看底层 Pi 运行时版本 |
 | `codey --resume` | 选择一个已保存的会话 |
 | `/login` | 配置已列出的模型服务商登录 |
+| `/provider` | 添加或编辑自定义模型网关和模型 ID |
 | `/model` | 选择当前会话的模型 |
 | `/mcp` | 管理已配置的 MCP 服务 |
 | `/review`、`/worktree` | 审查改动或管理工作树 |
