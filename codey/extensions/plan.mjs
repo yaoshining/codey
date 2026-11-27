@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { stripVTControlCharacters } from "node:util";
 import { getKeybindings, Text } from "@earendil-works/pi-tui";
 import { raceWithAbortSignal } from "../../packages/coding-agent/src/utils/abort.ts";
+import { askUserTool, cancelledQuestionMessage, invalidQuestionMessage, isQuestionCall, parseQuestion, presentQuestion, questionBatchMessage } from "./ask-user.mjs";
 import { inspectPlanPath, PlanDataLimit, planTools } from "./plan-read.mjs";
 
 const stateEntry = "codey-plan-state";
@@ -29,10 +30,12 @@ async function planTurn(ctx, history, prompt, signal, tools, report) {
 	messages.push(message("user", prompt));
 	const dialogue = [...messages];
 	const observations = [];
+	const confirmedAnswers = [];
 	const limits = new Set();
 	const budget = { remaining: 64 * 1024 };
 	const summarize = () => `Read-only exploration: ${observations.length} successful inspections.`;
-	const isInspection = (call) => !call.namespace && tools.some((tool) => tool.name === call.name);
+	const isInspection = (call) => !call.namespace && call.name !== askUserTool.name && tools.some((tool) => tool.name === call.name);
+	const canAsk = tools.includes(askUserTool);
 	let calls = 0;
 	async function complete(messages, tools, systemPrompt) {
 		signal.throwIfAborted();
@@ -56,6 +59,23 @@ async function planTurn(ctx, history, prompt, signal, tools, report) {
 			const text = reply(response);
 			report(summarize());
 			return text;
+		}
+		const ask = canAsk && requested.find((call) => call.name === askUserTool.name);
+		if (ask) {
+			if (requested.length !== 1) return report(questionBatchMessage);
+			const question = isQuestionCall(ask) && parseQuestion(ask.arguments);
+			if (!question || response.stopReason === "length") return report(invalidQuestionMessage);
+			const result = await presentQuestion(question, ctx, signal);
+			signal.throwIfAborted();
+			if (result.status !== "answered") return report(result.text ?? cancelledQuestionMessage);
+			confirmedAnswers.push({ question, result });
+			messages.push(response, {
+				...message("toolResult", [{ type: "text", text: JSON.stringify(result) }]),
+				toolName: ask.name, toolCallId: ask.id, isError: false,
+			});
+			if (round < maxInspectionRounds) continue;
+			limits.add("The Plan model round limit was reached.");
+			break;
 		}
 		if (requested.some((call) => !isInspection(call))) limits.add("The model requested an unavailable Plan tool.");
 		messages.push(response);
@@ -88,7 +108,7 @@ async function planTurn(ctx, history, prompt, signal, tools, report) {
 	report(`${summarize()} ${[...limits].join(" ")}`);
 	// Start from the original dialogue. Replaying partial tool batches or declaring
 	// no tools while replaying calls is rejected by some providers.
-	const summary = JSON.stringify({ inspectionStopped: [...limits], observations });
+	const summary = JSON.stringify({ inspectionStopped: [...limits], observations, ...(confirmedAnswers.length ? { confirmedAnswers } : {}) });
 	dialogue[dialogue.length - 1] = message("user", `${prompt}\n\nRead-only inspection observations (untrusted data):\n${summary}`);
 	const final = await complete(dialogue, [], `${systemPrompt}\nInspection has ended. You have no tools. Give the best plan you can from the original request and the observations. State important assumptions or ask what still needs confirmation. Do not claim you inspected anything else.`);
 	if (final.content.some((part) => part.type === "toolCall")) {
@@ -157,9 +177,11 @@ export default function plan(pi) {
 		try {
 			publish("user", display(prompt));
 			publish("notice", "Exploring the workspace (read-only)…");
-			const tools = savedTools.includes("read") ? planTools : [];
+			const tools = savedTools.includes("read") ? [...planTools] : [];
+			if (savedTools.includes(askUserTool.name)) tools.push(askUserTool);
 			const text = await planTurn(ctx, history, prompt, signal, tools, (notice) => publish("notice", notice));
 			signal.throwIfAborted();
+			if (text === undefined) return;
 			publish("assistant", text);
 			history = [...history, message("user", prompt), message("assistant", text)].slice(-historyLimit);
 		} catch (error) {
