@@ -28,4 +28,4 @@
 | `/review`、`/worktree` | 审查改动或管理工作树 |
 | `/quit` | 退出 |
 
-如果 shell 报 `command not found`，按安装输出执行 PATH 设置。如果登录正常但模型列表为空，检查启动的是否是 `codey`、配置是否在有效用户目录；如显式设置 `CODEY_CODING_AGENT_DIR`，普通模式会优先用它。安装器不会自动导入 `~/.pi/agent`。 [用户目录与手动共享](../../codey/README.md#user-directories-and-explicit-sharing)
+如果 shell 报 `command not found`，按安装输出执行 PATH 设置。如果登录正常但模型列表为空，检查启动的是否是 `codey`、配置是否在有效用户目录。普通模式默认使用 `~/.codey/agent`，显式 `--agent-dir <目录>` 优先于 `CODEY_CODING_AGENT_DIR`。安装器不会自动导入 `~/.pi/agent`。 [用户目录与手动共享](../../codey/README.md#user-directories-and-explicit-sharing)

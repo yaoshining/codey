@@ -246,7 +246,7 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	assert.ok(help.includes(context.agent));
 	const exportPath = join(context.agent, "sessions/--path--/session.jsonl");
 	assert.ok(help.includes("'" + exportPath.replaceAll("'", "'\\''") + "'"), "export path must be shell quoted");
-	for (const option of ["--mode", "--no-session", "--provider", "--model"]) assert.ok(help.includes(option));
+	for (const option of ["--mode", "--no-session", "--provider", "--model", "--agent-dir"]) assert.ok(help.includes(option));
 	const auth = run(context, ["auth", "--help"]).stdout;
 	assert.match(auth, /  codey auth login/);
 	assert.ok(auth.includes(join(context.agent, "auth.json")));
@@ -255,7 +255,7 @@ test("Codey main and auth help show the effective path while stock Pi help stays
 	assert.match(original, /^pi - AI coding assistant/m);
 	assert.match(original, /  pi \[options\]/);
 	assert.match(original, /^  # Interactive mode$/m);
-	assert.ok(original.includes("Config directory (default: ~/.pi/agent)"));
+	assert.ok(original.includes("Config directory (default: ~/.pi/agent, overridden by --agent-dir)"));
 	assert.ok(original.includes("pi --export ~/.pi/agent/sessions/--path--/session.jsonl"));
 	assert.doesNotMatch(original, /codey -|  codey /);
 	assert.doesNotMatch(original, /--(?:codey|pi)-version/);
@@ -291,6 +291,12 @@ test("nonempty Codey configuration overrides win over explicit legacy overrides"
 		assertModel(rpc(context, { env: entry.env }).state, entry.expected);
 		assert.ok(run(context, ["auth", "--help"], { env: entry.env }).stdout.includes(join(entry.path, "auth.json")));
 	}
+	const cliDirectory = join(context.directory, "command-line agent");
+	const cli = seed(context, "cli", cliDirectory);
+	assertModel(rpc(context, {
+		args: ["--agent-dir", cliDirectory],
+		env: { CODEY_CODING_AGENT_DIR: newDirectory, PI_CODING_AGENT_DIR: oldDirectory },
+	}).state, cli);
 });
 
 test("explicit reuse of old data keeps Pi's writable migration behavior", (t) => {

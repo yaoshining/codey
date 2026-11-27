@@ -12,10 +12,12 @@ Nonempty overrides have this precedence:
 
 | Setting | Highest to lowest priority |
 | --- | --- |
-| Agent directory | `CODEY_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR`, `~/.codey/agent` |
+| Agent directory | `--agent-dir`, `CODEY_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR`, `~/.codey/agent` |
 | Session directory | `--session-dir`, `CODEY_CODING_AGENT_SESSION_DIR`, `PI_CODING_AGENT_SESSION_DIR`, upstream configured/default session directory |
 
 Empty environment values count as absent. Codey maps the selected values to Pi's existing environment variables only in the launched process; it does not modify the parent shell. `PI_PACKAGE_DIR`, provider credential variables, `PI_OFFLINE` and other Pi switches pass through unchanged. Codey does not set `piConfig.name` or replace the package asset root, so themes, documentation, templates and version metadata retain their upstream locations.
+
+Pi 1.7.0 adds `--agent-dir` in ordinary mode and carries the effective directory in the resume command when needed. Codey's exit hint and terminal resume report use the `codey` entry point. The terminal report also carries the upstream restrictions and resource flags from the original invocation.
 
 To explicitly share the old Pi state without copying it:
 
