@@ -1,4 +1,4 @@
-// ACP v1 over stdio. Protocol input never grants workspace, network, or tool permissions.
+// ACP v1 over stdio. The launcher fixes the workspace and maximum Seatbelt permissions.
 import { basename, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
@@ -30,6 +30,10 @@ const methodNotFound = () => new RequestError("Method is unavailable in Codey AC
 const select = (id, name, category, currentValue, options) => ({ id, name, category, type: "select", currentValue, options });
 const modelId = (model) => `${model.provider}/${model.id}`;
 const textContent = (text) => ({ type: "text", text });
+const permissionCapability = "com.github.yaoshining.codey/sessionPermissions";
+const setPermissionMode = "_" + permissionCapability + "/setMode";
+const supervised = "approval-required";
+const autoAccept = "auto-accept-edits";
 
 function modelCatalog(models, managedProviders, defaultThinking) {
 	return models.map((model) => {
@@ -162,7 +166,7 @@ function skillSelection(blocks, parts, isT3) {
 	return { name: match[1], leading, args, carriedContext };
 }
 
-export async function runSandboxAcp({ home, prepare, wireWrite,
+export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeiling,
 	input = process.stdin, stdout = process.stdout }) {
 	const startup = new AbortController();
 	let initialized = false;
@@ -176,6 +180,8 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 	let pending;
 	let turn;
 	let reportedMcp = false;
+	const permittedModes = permissionCeiling === "workspace-write" ? [supervised, autoAccept] : [supervised];
+	const permissionState = () => active.permission ? { _meta: { [permissionCapability]: { mode: active.permission.mode } } } : {};
 
 	function disconnect() {
 		if (closing) return;
@@ -250,17 +256,22 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 	}
 
 	async function attach(id) {
-		if (id !== undefined && id === active?.id) return;
+		if (id !== undefined && id === active?.id) {
+			if (active.permission) active.permission.mode = supervised;
+			return;
+		}
 		let file;
 		try { file = open(id); } catch (error) {
 			if (error instanceof SandboxRpcResumeError) throw new RequestError(error.message);
 			throw new RequestError("The saved Codey ACP session could not be opened safely.");
 		}
 		try {
-			const { session } = await createSession(file.manager, id === undefined ? model : undefined);
+			// Permission selections are connection-local. A reload always starts supervised.
+			const permission = permissionCeiling === undefined ? undefined : { mode: supervised };
+			const { session } = await createSession(file.manager, id === undefined ? model : undefined, permission);
 			active?.session.dispose();
 			active?.release();
-			active = { session, release: file.release, id: basename(file.manager.getSessionFile()) };
+			active = { session, release: file.release, id: basename(file.manager.getSessionFile()), permission };
 		} catch (error) {
 			file.release();
 			throw error;
@@ -376,12 +387,13 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 				discovery = setupDiscovery(catalog, prepared.model);
 			} else {
 				({ workspace, runtime, model, createSession, managedProviders, defaultThinkingLevel, runProjectSkill } = prepared);
-				open = sandboxAcpSessions(home, workspace);
+				open = sandboxAcpSessions(home, workspace, permissionCeiling !== undefined);
 			}
 			return {
 				protocolVersion: 1, agentInfo: { name: "codey", title: "Codey", version: codeyVersion },
 				agentCapabilities: metadataOnly ? { loadSession: false, sessionCapabilities: { delete: {} } } : {
 					loadSession: true, promptCapabilities: { image: false, audio: false, embeddedContext: false },
+					...(permissionCeiling === undefined ? {} : { _meta: { [permissionCapability]: { modes: permittedModes } } }),
 				},
 				authMethods: [],
 			};
@@ -393,13 +405,22 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 			case "session/new":
 				checkSetup(params);
 				await attach();
-				return { sessionId: active.id, ...config(active.session, true) };
+				return { sessionId: active.id, ...config(active.session, true), ...permissionState() };
 			case "session/load":
 				checkSetup(params);
 				if (typeof params.sessionId !== "string" || !params.sessionId) throw new RequestError("A session ID is required.");
 				await attach(params.sessionId);
 				replay();
-				return config(active.session, true);
+				return { ...config(active.session, true), ...permissionState() };
+			case setPermissionMode: {
+				if (permissionCeiling === undefined) throw methodNotFound();
+				checkedSession(params);
+				if (params.mode === "auto") throw new RequestError("Auto is unavailable. Codey has no automatic approval reviewer in this mode.");
+				if (params.mode === "full-access") throw new RequestError("Full access is unavailable in Codey ACP.");
+				if (!permittedModes.includes(params.mode)) throw new RequestError("Permission mode is unknown or exceeds the launch ceiling.");
+				active.permission.mode = params.mode;
+				return { mode: active.permission.mode };
+			}
 			case "session/set_config_option": {
 				const session = checkedSession(params);
 				if (params.configId === "model") {

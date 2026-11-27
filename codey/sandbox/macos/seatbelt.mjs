@@ -53,7 +53,7 @@ export function managedProfile() {
 `;
 }
 
-export async function openSeatbelt(workspace, hostHome, signal) {
+export async function openSeatbelt(workspace, hostHome, signal, { permissionCeiling } = {}) {
 	if (!lstatSync(backend, { throwIfNoEntry: false })?.isFile()) {
 		throw new Error("The macOS Seatbelt launcher /usr/bin/sandbox-exec is unavailable.");
 	}
@@ -112,6 +112,10 @@ export async function openSeatbelt(workspace, hostHome, signal) {
 	const managed = dirname(bucket) === pool && /^task-[A-Za-z0-9]{6}$/.test(bucket.slice(pool.length + 1)) && gitStat?.isFile();
 	const workerProfile = managed ? join(hostDir, "managed.sbpl") : profile;
 	const execute = (name, args, signal) => runSeatbelt({ workspace, node, params, env, policy: workerProfile, name, args, signal });
+	const readOnlyProfile = join(hostDir, "read-only.sbpl");
+	const executeReadOnly = (name, args, signal) => runSeatbelt({
+		workspace, node, params, env, policy: readOnlyProfile, name, args, signal,
+	});
 	let reviewPolicy;
 	async function review(signal) {
 		if (!reviewPolicy) {
@@ -139,12 +143,20 @@ export async function openSeatbelt(workspace, hostHome, signal) {
 	try {
 		mkdirSync(env.HOME, { mode: 0o700 });
 		if (managed) writeFileSync(workerProfile, managedProfile(), { flag: "wx", mode: 0o600 });
+		if (permissionCeiling !== undefined) {
+			const rules = '\n(deny file-write* (subpath (param "WORKSPACE")))\n';
+			writeFileSync(readOnlyProfile, readFileSync(workerProfile, "utf8") + rules, { flag: "wx", mode: 0o600 });
+		}
 		const hostProbe = join(hostDir, "denied-probe");
 		writeFileSync(hostProbe, "sandbox probe", { mode: 0o600 });
 		if (readFileSync(hostProbe, "utf8") !== "sandbox probe") throw new Error("Host preflight file is unreadable.");
-		const result = await execute("ready", { hostProbe }, signal);
+		const result = await (permissionCeiling === undefined ? execute : executeReadOnly)("ready", { hostProbe }, signal);
 		if (!result.ready) throw new Error("Seatbelt worker did not complete its startup check.");
-		return { execute, review, close, hostDir };
+		return {
+			execute: permissionCeiling === "read-only" ? executeReadOnly : execute,
+			...(permissionCeiling === undefined ? {} : { executeReadOnly }),
+			review, close, hostDir,
+		};
 	} catch (error) {
 		close();
 		throw new Error(`Seatbelt startup failed: ${error.message}`);
