@@ -201,7 +201,7 @@ def run(binary, adapter_fixture=None):
             assert Model.probes == 1 and outside.read_text() == "outside fixture" and not extension_marker.exists()
             assert marker.read_text() == "protected fixture"
             names = {entry["function"]["name"] for entry in Model.requests[0]["tools"]}
-            assert names == {"read", "write", "edit", "ls", "bash"}, names
+            assert names == {"read", "write", "edit", "ls", "bash", "ask_user"}, names
             assert Model.requests[0]["model"] == "fixture-two"
             entries = rpc.request("get_entries")
             assert entries["leafId"] and session_path.exists() and session_path.stat().st_mode & 0o077 == 0

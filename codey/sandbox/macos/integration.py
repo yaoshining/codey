@@ -196,7 +196,9 @@ def main():
         assert index.read_bytes() == old_index
         assert (source / "tracked").read_text() == "committed"
         assert len(FakeModel.requests) == 2
-        assert {t["function"]["name"] for t in FakeModel.requests[0]["tools"]} == {"read", "write", "edit", "bash", "ls", "https_read"}
+        assert {t["function"]["name"] for t in FakeModel.requests[0]["tools"]} == {
+            "read", "write", "edit", "bash", "ls", "https_read", "ask_user",
+        }
         assert "CONTEXT_EXCLUDED" not in json.dumps(FakeModel.requests)
         assert "MANUAL_OK" in json.dumps(FakeModel.requests)
         print("PASS: the public terminal fenced manual commands and model writes; fake model and linked metadata verified.", flush=True)
