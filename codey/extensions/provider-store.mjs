@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { lockSync } from "proper-lockfile";
 import { authentication, protocols, supportedEffortValues, validModelId } from "./provider-protocols.mjs";
 import { authorizedProviderEndpoint } from "./provider-endpoint.mjs";
+import { validateModelLimits } from "./provider-limits.mjs";
 
 const validName = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
 const validId = /^[a-z][a-z0-9_-]{0,39}$/;
@@ -140,6 +141,7 @@ export function providerStore(home, workspace) {
 					const displayName = validateDisplayName(Object.hasOwn(raw, "displayName") ? raw.displayName : id);
 					const profile = { id, displayName, api: raw.api, auth: raw.auth, baseUrl, models: [...new Set(raw.models)] };
 					if (raw.reasoningLevels !== undefined) profile.reasoningLevels = validateReasoning(profile, raw.reasoningLevels);
+					if (raw.modelLimits !== undefined) profile.modelLimits = validateModelLimits(profile, raw.modelLimits);
 					if (lanHttp) profile.lanHttpApprovedUrl = raw.lanHttpApprovedUrl;
 					if (raw.auth === "key") profile.key = providerKey(raw.key);
 					entries.push({ profile, revision });
@@ -155,6 +157,7 @@ export function providerStore(home, workspace) {
 			authorizedProviderEndpoint(profile);
 			validateDisplayName(profile.displayName);
 			validateReasoning(profile, profile.reasoningLevels);
+			validateModelLimits(profile, profile.modelLimits);
 			update(profile.id, revision, (target) => write(target, profile, revision === undefined));
 		},
 		setModelReasoning(id, revision, model, levels) {

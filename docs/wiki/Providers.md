@@ -30,6 +30,14 @@ OpenAI Responses 发送 `reasoning.effort`，可选 `minimal`、`low`、`medium`
 
 更换协议或 Base URL 后，要为新路由重新选择支持的档位。其他正在运行的 Codey 或 T3 连接需重启以加载这份配置。普通 RPC 沿用 Pi 的档位回退规则，沙箱 RPC 会明确拒绝不支持的档位。
 
+### 读取和调整模型上下文与输出上限
+
+在普通 Codey 的 `/provider` 中选择 **Configure model limits**，选已保存的连接与模型。添加或编辑连接时，选好模型后也可以进入此菜单。每一项会显示当前值及来源。**Read gateway limits** 会用当前连接查看目录，缺项时尝试同一 Base URL 下的 `/model/info`。只匹配模型的完整路由 ID。查不到的项会标为未知，继续使用兼容默认值 32,000（上下文）和 4,096（输出）。
+
+上下文上限是输入与输出合计的 token 数。目录里的 `max_input_tokens` 只说明输入上限，Codey 不把它换算成上下文。Codey 接受语义明确的 `context_window` 或 `context_length`、`max_output_tokens`，以及部分已知目录的输出字段，例如 Anthropic 模型目录的 `max_tokens`。普通 OpenAI 模型列表可能只有模型 ID。 [OpenAI 模型列表](https://developers.openai.com/api/reference/go/resources/models/methods/list) · [Anthropic 模型目录](https://platform.claude.com/docs/en/api/models/list) · [LiteLLM 模型管理](https://docs.litellm.ai/docs/proxy/model_management)
+
+用 **Edit context window** 和 **Edit output limit** 分别填写整数，清空对应输入可恢复自动。手动值优先，重新读取目录不会覆盖它。确认保存后，其他已运行的 Codey、RPC 或 ACP 会话可通过重新启动使用新值。输出还受当前可用上下文约束，接近窗口时请求预算可能低于所填的上限。沙箱 RPC 和 ACP 沿用现有的上下文压缩设置。
+
 ### 局域网 LiteLLM 使用 HTTP
 
 在向导里填写如 `http://192.168.1.20:4000/v1` 或 `http://nas.local:4000/v1`。首次使用时会显示完整地址并请你确认。确认后，API key、提示词、代码和响应会以明文传输。直接选择 **Discover via the model catalog** 即可获取模型列表，保存后可正常推理。换主机、端口或 Base URL 路径需要重新确认。取消确认不会发送请求或保存变更。
