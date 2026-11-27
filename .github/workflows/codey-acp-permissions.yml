@@ -1,0 +1,33 @@
+name: Verify Codey ACP permissions on macOS
+on:
+  push:
+    branches: [verify/codey-acp-permissions]
+    paths: [.github/workflows/codey-acp-permissions.yml]
+permissions:
+  contents: read
+jobs:
+  acp:
+    runs-on: macos-26-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f23389794bf7406c26367234dfb6e2dd2de93711
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Install fixed revision with a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = f23389794bf7406c26367234dfb6e2dd2de93711
+          mkdir -p "$RUNNER_TEMP/install-home"
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh f23389794bf7406c26367234dfb6e2dd2de93711
+      - name: Test installed ACP permissions, legacy ACP and RPC with a loopback model
+        run: |
+          python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey" --permissions-only
+          python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey"
+          python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
