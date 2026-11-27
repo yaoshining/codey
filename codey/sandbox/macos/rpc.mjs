@@ -4,6 +4,7 @@ import { THINKING_LEVEL_OPTIONS } from "../../../packages/coding-agent/src/core/
 import { toJsonEvent } from "../../../packages/coding-agent/src/modes/json-event.ts";
 import { serializeJsonLine } from "../../../packages/coding-agent/src/modes/rpc/jsonl.ts";
 import { readFrames } from "./jsonl.mjs";
+import { finalizedQuestionText } from "./questions.mjs";
 import { SandboxRpcResumeError, sandboxRpcSessions } from "./rpc-sessions.mjs";
 
 const maxRequest = 256 * 1024;
@@ -39,7 +40,16 @@ export async function runSandboxRpc({ workspace, home, runtime, launchPath, ephe
 		session = next;
 		release = file.release;
 		unsubscribe = session.subscribe((event) => {
-			try { output(toJsonEvent(event)); } catch { disconnect(); }
+			try {
+				const question = finalizedQuestionText(event);
+				if (question) {
+					// Older adapters render deltas and use message_end only to close the item.
+					output({ type: "message_update", usage: event.message.usage, assistantMessageEvent: {
+						type: "text_delta", contentIndex: question.index, delta: question.text,
+					} });
+				}
+				output(toJsonEvent(event));
+			} catch { disconnect(); }
 		});
 	}
 	function stopTurn() {

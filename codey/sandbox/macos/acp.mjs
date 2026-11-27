@@ -3,9 +3,11 @@ import { basename, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { DEFAULT_THINKING_LEVEL } from "../../../packages/coding-agent/src/core/defaults.ts";
+import { customQuestionAnswer, questionAsText } from "../../extensions/ask-user.mjs";
 import { codeyVersion } from "../../version.mjs";
 import { discoverSkills, loadSkill, projectSkillsCommand } from "./acp-skills.mjs";
 import { readFrames } from "./jsonl.mjs";
+import { finalizedQuestionText } from "./questions.mjs";
 import { SandboxRpcResumeError, sandboxAcpSessions } from "./rpc-sessions.mjs";
 
 const maxFrame = 256 * 1024;
@@ -179,6 +181,8 @@ export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeilin
 	let active;
 	let pending;
 	let turn;
+	let formSupported = false;
+	let formRequest;
 	let reportedMcp = false;
 	const permittedModes = permissionCeiling === "workspace-write" ? [supervised, autoAccept] : [supervised];
 	const permissionState = () => active.permission ? { _meta: { [permissionCapability]: { mode: active.permission.mode } } } : {};
@@ -204,6 +208,59 @@ export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeilin
 
 	function update(id, item) {
 		write({ method: "session/update", params: { sessionId: id, update: item } });
+	}
+
+	async function presentQuestion(question, signal) {
+		const current = turn;
+		if (closing || formRequest || !current || current.cancelled || signal?.aborted) return { status: "cancelled" };
+		const session = active;
+		function useText() {
+			const text = questionAsText(question);
+			update(session.id, { sessionUpdate: "agent_message_chunk", content: textContent(text) });
+			return { status: "waiting", text };
+		}
+		if (!formSupported) return useText();
+		const id = `codey-question-${randomUUID()}`;
+		const field = id;
+		const other = `${field}__other`;
+		const wait = AbortSignal.any([current.skills.signal, AbortSignal.timeout(120_000), ...(signal ? [signal] : [])]);
+		const response = await new Promise((resolve) => {
+			const aborted = () => finish(undefined);
+			function finish(reply) {
+				wait.removeEventListener("abort", aborted);
+				formRequest = undefined;
+				resolve(reply);
+			}
+			if (wait.aborted) return resolve(undefined);
+			formRequest = { id, finish };
+			wait.addEventListener("abort", aborted, { once: true });
+			write({ id, method: "elicitation/create", params: {
+				sessionId: session.id,
+				mode: "form",
+				message: question.question,
+				requestedSchema: { type: "object", properties: {
+					[field]: { type: "string", title: "Question from Codey", description: question.question,
+						oneOf: question.options.map(({ id, title, description, recommended }) => ({
+							const: id, title: recommended ? `${title} [Recommended]` : title, description,
+						})) },
+					[other]: { type: "string", title: "Custom answer", maxLength: 240 },
+				} },
+			} });
+		});
+		if (closing || wait.aborted || current !== turn || session !== active) return { status: "cancelled" };
+		if (response?.error?.code === -32601) {
+			formSupported = false;
+			return useText();
+		}
+		if (response?.error !== undefined || response?.result?.action !== "accept") return { status: "cancelled" };
+		const content = response.result.content;
+		if (!content || typeof content !== "object" || Array.isArray(content) || Object.keys(content).length !== 1) {
+			return { status: "cancelled" };
+		}
+		const optionId = content[field];
+		const answer = question.options.some((option) => option.id === optionId)
+			? { kind: "option", optionId } : customQuestionAnswer(content[other]);
+		return answer ? { status: "answered", questionId: question.id, answer } : { status: "cancelled" };
 	}
 
 	function available() {
@@ -268,7 +325,8 @@ export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeilin
 		try {
 			// Permission selections are connection-local. A reload always starts supervised.
 			const permission = permissionCeiling === undefined ? undefined : { mode: supervised };
-			const { session } = await createSession(file.manager, id === undefined ? model : undefined, permission);
+			const { session } = await createSession(file.manager, id === undefined ? model : undefined, permission,
+				formSupported ? presentQuestion : undefined);
 			active?.session.dispose();
 			active?.release();
 			active = { session, release: file.release, id: basename(file.manager.getSessionFile()), permission };
@@ -308,8 +366,11 @@ export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeilin
 			return { stopReason: "end_turn" };
 		};
 		const stop = session.subscribe((event) => {
+			const question = finalizedQuestionText(event);
 			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(event.assistantMessageEvent.delta) });
+			} else if (question && !current.cancelled) {
+				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(question.text) });
 			} else if (event.type === "tool_execution_start") {
 				update(id, { sessionUpdate: "tool_call", toolCallId: event.toolCallId,
 					title: event.toolName, kind: ({ bash: "execute", edit: "edit", write: "edit", read: "read", ls: "search" })[event.toolName] ?? "other",
@@ -374,6 +435,8 @@ export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeilin
 			}
 			initialized = true;
 			isT3 = params.clientInfo?.name === "t3-code";
+			const form = params.clientCapabilities?.elicitation?.form;
+			formSupported = form !== null && typeof form === "object" && !Array.isArray(form);
 			// The client name only selects fewer capabilities for the lifetime of this process.
 			const metadataOnly = params.clientInfo?.name === "t3-code-provider-test";
 			const prepared = await prepare(metadataOnly, startup.signal);
@@ -449,6 +512,12 @@ export async function runSandboxAcp({ home, prepare, wireWrite, permissionCeilin
 		}
 		const { id, method, params = {} } = request ?? {};
 		const isId = id === null || typeof id === "string" || Number.isSafeInteger(id);
+		if (request?.jsonrpc === "2.0" && method === undefined && isId &&
+			(Object.hasOwn(request, "result") || Object.hasOwn(request, "error"))) {
+			// This connection has at most one outstanding form. Ignore stale and unsolicited replies.
+			if (formRequest?.id === id) formRequest.finish(request);
+			return;
+		}
 		if (request?.jsonrpc !== "2.0" || typeof method !== "string" || (id !== undefined && !isId)) {
 			failure(isId ? id : null, -32600, "Invalid ACP request.");
 			return;
