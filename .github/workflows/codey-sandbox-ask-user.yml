@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 2e7bda45c06f489e3193f2ede532107420ed7c14
+          ref: c833f152a7dad5a07d0b2b783a3367608043c750
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -23,9 +23,9 @@ jobs:
           uname -m
           node --version
           git rev-parse HEAD
-          test "$(git rev-parse HEAD)" = 2e7bda45c06f489e3193f2ede532107420ed7c14
-          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 2e7bda45c06f489e3193f2ede532107420ed7c14
-          git -C "$RUNNER_TEMP/codey-installed/2e7bda45c06f489e3193f2ede532107420ed7c14" rev-parse HEAD
+          test "$(git rev-parse HEAD)" = c833f152a7dad5a07d0b2b783a3367608043c750
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh c833f152a7dad5a07d0b2b783a3367608043c750
+          git -C "$RUNNER_TEMP/codey-installed/c833f152a7dad5a07d0b2b783a3367608043c750" rev-parse HEAD
       - name: Prepare pinned real T3 Local command adapter
         run: |
           git init --quiet "$RUNNER_TEMP/t3"
