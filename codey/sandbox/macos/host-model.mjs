@@ -85,7 +85,7 @@ export async function hostModel(home, workspace, hostDir) {
 	// snapshot consumed by the SDK's initial model selection.
 	const runtime = await ModelRuntime.create({ credentials, modelsPath, modelsStore, allowModelNetwork: false });
 	const warnings = [warning].filter(Boolean);
-	const managedProviders = new Set();
+	const managedProviders = new Map();
 	try {
 		const saved = providerStore(home, workspace)?.list();
 		if (saved) {
@@ -93,7 +93,7 @@ export async function hostModel(home, workspace, hostDir) {
 			for (const { profile } of saved.entries) {
 				if (runtime.getProvider(profile.id)) continue;
 				runtime.registerNativeProvider(providerFromProfile(profile));
-				managedProviders.add(profile.id);
+				managedProviders.set(profile.id, profile.displayName);
 			}
 			if (managedProviders.size) {
 				// Registration starts background catalog refreshes of its own. Finish with an

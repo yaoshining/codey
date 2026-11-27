@@ -32,18 +32,26 @@ const modelId = (model) => `${model.provider}/${model.id}`;
 const textContent = (text) => ({ type: "text", text });
 
 function modelCatalog(models, managedProviders, defaultThinking) {
-	return models.map((model) => ({
-		id: modelId(model),
-		name: managedProviders.has(model.provider) ? model.id : model.name,
-		levels: getSupportedThinkingLevels(model),
-		thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
-	}));
+	return models.map((model) => {
+		const displayName = managedProviders.get(model.provider);
+		return {
+			id: modelId(model),
+			name: displayName === undefined ? model.name : model.id,
+			levels: getSupportedThinkingLevels(model),
+			thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
+			...(displayName === undefined ? {} : { providerMeta: {
+				"com.github.yaoshining.codey/subProvider": { id: model.provider, displayName },
+			} }),
+		};
+	});
 }
 
 function configOptions(model, thinking, catalog) {
 	if (!model) return [];
 	return [
-		select("model", "Model", "model", model.id, catalog.map(({ id, name }) => ({ value: id, name }))),
+		select("model", "Model", "model", model.id, catalog.map(({ id, name, providerMeta }) => ({
+			value: id, name, ...(providerMeta ? { _meta: providerMeta } : {}),
+		}))),
 		select("thinking", "Thinking", "thought_level", thinking,
 			model.levels.map((level) => ({ value: level, name: level }))),
 	];
@@ -60,6 +68,7 @@ function sessionOptions(model, thinking, catalog) {
 			modelId: entry.id,
 			name: entry.name,
 			_meta: {
+				...entry.providerMeta,
 				reasoningEfforts: entry.levels.map((value) => ({ value, label: value })),
 				reasoningEffort: entry.id === model.id ? thinking : entry.thinking,
 			},
