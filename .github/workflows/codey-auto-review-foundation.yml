@@ -1,0 +1,34 @@
+name: Verify Codey auto-review foundation on macOS
+on:
+  push:
+    branches: [verify/codey-auto-review-foundation]
+    paths: [.github/workflows/codey-auto-review-foundation.yml]
+permissions:
+  contents: read
+jobs:
+  verification:
+    runs-on: macos-26-intel
+    timeout-minutes: 15
+    env:
+      CANDIDATE: 567192989d14551be2abfa05b416afa0f75b4187
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 567192989d14551be2abfa05b416afa0f75b4187
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Install the exact candidate with a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          mkdir -p "$RUNNER_TEMP/install-home"
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh "$CANDIDATE"
+      - name: Test reviewer requests against a synthetic loopback model
+        run: |
+          cd "$RUNNER_TEMP/codey-installed/$CANDIDATE"
+          env -i HOME="$RUNNER_TEMP/install-home" PATH="$PATH" node --import ./packages/coding-agent/src/experimental/source-resolver.ts --test codey/test/auto-review.test.mjs
+      - name: Verify installed ACP still rejects Auto and enforces native Seatbelt policy
+        run: python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey" --permissions-only
