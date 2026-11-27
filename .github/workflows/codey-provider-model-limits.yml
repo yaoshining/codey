@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: d3ee9ee82658c979f0786960d1522fb910e23814
+          ref: 5fa2d85c09ea0a4031a15f86b5021508572b7140
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -23,9 +23,15 @@ jobs:
           uname -m
           node --version
           git rev-parse HEAD
-          test "$(git rev-parse HEAD)" = d3ee9ee82658c979f0786960d1522fb910e23814
-          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh d3ee9ee82658c979f0786960d1522fb910e23814
-          git -C "$RUNNER_TEMP/codey-installed/d3ee9ee82658c979f0786960d1522fb910e23814" rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 5fa2d85c09ea0a4031a15f86b5021508572b7140
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 5fa2d85c09ea0a4031a15f86b5021508572b7140
+          git -C "$RUNNER_TEMP/codey-installed/5fa2d85c09ea0a4031a15f86b5021508572b7140" rev-parse HEAD
+      - name: Verify real provider menu and captured ordinary and Seatbelt RPC requests
+        continue-on-error: false
+        run: |
+          python3 -m venv "$RUNNER_TEMP/provider-test-python"
+          "$RUNNER_TEMP/provider-test-python/bin/pip" install 'pexpect==4.9.0'
+          "$RUNNER_TEMP/provider-test-python/bin/python" codey/test/provider-limits.integration.py "$RUNNER_TEMP/codey-bin/codey" --sandbox
       - name: Prepare pinned real T3 Local command adapter
         run: |
           git init --quiet "$RUNNER_TEMP/t3"
@@ -40,8 +46,3 @@ jobs:
         run: python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey" "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-acp-fixture.mjs"
       - name: Regress existing Pi RPC and Seatbelt
         run: python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
-      - name: Verify real provider menu and captured ordinary and Seatbelt RPC requests
-        run: |
-          python3 -m venv "$RUNNER_TEMP/provider-test-python"
-          "$RUNNER_TEMP/provider-test-python/bin/pip" install 'pexpect==4.9.0'
-          "$RUNNER_TEMP/provider-test-python/bin/python" codey/test/provider-limits.integration.py "$RUNNER_TEMP/codey-bin/codey" --sandbox
