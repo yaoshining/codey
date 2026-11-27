@@ -57,11 +57,15 @@ export function parseQuestion(input) {
 	return { id: input.id, question: input.question.trim(), options };
 }
 
-const labels = (question) => question.options.map(({ title, description, recommended }, index) =>
+export const questionLines = (question) => question.options.map(({ title, description, recommended }, index) =>
 	`${index + 1}. ${title}${recommended ? " [Recommended]" : ""} — ${description}`);
 
 export function questionAsText(question) {
-	return [question.question, ...labels(question), "Reply with a choice or your own answer in a new message."].join("\n");
+	return [question.question, ...questionLines(question), "Reply with a choice or your own answer in a new message."].join("\n");
+}
+
+export function customQuestionAnswer(value) {
+	return plain(value, 240) ? { kind: "custom", text: value.trim() } : undefined;
 }
 
 let active = false;
@@ -74,7 +78,7 @@ export async function presentQuestion(question, ctx, signal) {
 	const deadline = AbortSignal.timeout(120_000);
 	const options = { signal: signal ? AbortSignal.any([signal, deadline]) : deadline, blockedKind: "question" };
 	try {
-		const choices = labels(question);
+		const choices = questionLines(question);
 		const custom = "Write a custom answer";
 		const selected = await ctx.ui.select(`Question from the model\n${question.question}`, ["Cancel question", ...choices, custom], options);
 		if (options.signal.aborted) return { status: "cancelled" };
@@ -82,9 +86,9 @@ export async function presentQuestion(question, ctx, signal) {
 		let answer, preview;
 		if (selected === custom) {
 			const text = await ctx.ui.input("Your answer", undefined, options);
-			if (!plain(text, 240)) return { status: "cancelled" };
-			preview = text.trim();
-			answer = { kind: "custom", text: preview };
+			answer = customQuestionAnswer(text);
+			if (!answer) return { status: "cancelled" };
+			preview = answer.text;
 		} else if (index !== -1) {
 			const option = question.options[index];
 			preview = option.title;
@@ -101,7 +105,15 @@ export async function presentQuestion(question, ctx, signal) {
 	}
 }
 
-export default function askUser(pi) {
+export function registerAskUser(pi, {
+	present = (question, signal, ctx) => presentQuestion(question, ctx, signal),
+	canPresent = (ctx) => ctx.mode === "tui" && ctx.hasUI,
+	onText = (message, text, ctx) => {
+		if (ctx.mode === "tui" && ctx.hasUI) {
+			try { ctx.ui.notify(text, "warning"); } catch { /* The TUI may already be closing. */ }
+		}
+	},
+} = {}) {
 	pi.on("message_end", ({ message }, ctx) => {
 		if (message.role !== "assistant") return;
 		const calls = message.content.filter((part) => part.type === "toolCall");
@@ -110,25 +122,28 @@ export default function askUser(pi) {
 		const question = isQuestionCall(call) && parseQuestion(call.arguments);
 		let text;
 		if (calls.length !== 1) text = questionBatchMessage;
-		else if (!question || message.stopReason === "length") text = invalidQuestionMessage;
-		else if (ctx.mode !== "tui" || !ctx.hasUI) text = questionAsText(question);
+		else if (!question || message.stopReason === "length" || message.stopReason === "error" || message.stopReason === "aborted") text = invalidQuestionMessage;
+		else if (!canPresent(ctx)) text = questionAsText(question);
 		else return;
 		// Pi inspects the finalized assistant message before dispatching the batch.
 		// A text-only replacement stops the turn and preserves a normal transcript.
-		if (ctx.mode === "tui" && ctx.hasUI) {
-			try { ctx.ui.notify(text, "warning"); } catch { /* The TUI may already be closing. */ }
-		}
-		return { message: { ...message, content: [{ type: "text", text }], stopReason: "stop" } };
+		onText(message, text, ctx);
+		const stopReason = ["error", "aborted"].includes(message.stopReason) ? message.stopReason : "stop";
+		return { message: { ...message, content: [{ type: "text", text }], stopReason } };
 	});
 	pi.registerTool({
 		...askUserTool, label: "Ask user", exposure: "model-only", executionMode: "sequential",
 		renderCall: () => new Text("Ask user", 0, 0),
 		async execute(_id, params, signal, _update, ctx) {
 			const question = parseQuestion(params);
-			const result = question ? await presentQuestion(question, ctx, signal) : { status: "invalid" };
+			const result = question ? await present(question, signal, ctx) : { status: "invalid" };
 			const answered = result.status === "answered";
 			const text = answered ? JSON.stringify(result) : result.text ?? (result.status === "invalid" ? invalidQuestionMessage : cancelledQuestionMessage);
 			return { content: [{ type: "text", text }], details: result, terminate: !answered };
 		},
 	});
+}
+
+export default function askUser(pi) {
+	registerAskUser(pi);
 }

@@ -126,12 +126,24 @@ function localCommand(fn, initialNativeThreadId) {
 	}).pipe(Effect.scoped, Effect.provide(layer));
 }
 
-function send(runtime, providerThread, text, ordinal, { interrupt = false, expected, inlineContextLength } = {}) {
+function send(runtime, providerThread, text, ordinal, { interrupt = false, expected, inlineContextLength, reply } = {}) {
 	return Effect.gen(function* () {
 		let turnId;
 		let displayed = false;
 		const terminal = yield* runtime.events.pipe(Stream.tap((event) => Effect.gen(function* () {
 			displayed ||= expected !== undefined && JSON.stringify(event).includes(expected);
+			if (reply && event.type === "turn_item.updated" && event.turnItem.type === "user_input_request" &&
+				event.turnItem.status === "waiting") {
+				const answer = reply;
+				reply = undefined;
+				const item = event.turnItem;
+				assert.equal(item.questions.length, 1);
+				const [question] = item.questions;
+				assert.equal(question.question, "Which output format?");
+				assert.ok(question.options.some(({ label, description }) => label === "Markdown [Recommended]" && description === "Readable text"));
+				assert.notEqual(question.allowCustomAnswer, false);
+				yield* runtime.respondToRuntimeRequest({ requestId: item.requestId, answers: { [question.id]: answer } }).pipe(Effect.forkScoped);
+			}
 			if (event.providerTurn?.id && event.providerTurn.ordinal === ordinal) turnId = event.providerTurn.id;
 			if (interrupt && turnId && JSON.stringify(event).includes("SLOW_STARTED")) {
 				interrupt = false;
@@ -234,7 +246,15 @@ const handoff = Effect.gen(function* () {
 	console.log("PASS: pinned T3 handoff delivery listed skills locally, retained history on cold resume, and routed only the current unambiguous skill.");
 });
 
-const scenario = mode === "pending-chat" ? pendingChat : mode === "probe" || mode === "pending-probe"
+const questions = localCommand((runtime) => Effect.gen(function* () {
+	const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
+	assert.equal(yield* send(runtime, thread, "CODEY_ASK_FIXTURE_OPTION", 1, { reply: "markdown", expected: "CONFIRMED_ANSWER" }), "completed");
+	assert.equal(yield* send(runtime, thread, "CODEY_ASK_FIXTURE_CUSTOM", 2, { reply: "CSV please", expected: "CONFIRMED_ANSWER" }), "completed");
+	assert.equal(yield* send(runtime, thread, "CODEY_ASK_FIXTURE_MIXED", 3, { expected: "No action was taken." }), "completed");
+	console.log("PASS: pinned T3 Local ACP renders separate question items, returns explicit choice and custom answers, and receives mixed-batch rejection as text.");
+}));
+
+const scenario = mode === "question" ? questions : mode === "pending-chat" ? pendingChat : mode === "probe" || mode === "pending-probe"
 	? settingsSnapshot.pipe(Effect.andThen(probeSettings)) : chat.pipe(Effect.andThen(handoff));
 await Effect.runPromise(scenario
 	.pipe(Effect.timeout("210 seconds")));

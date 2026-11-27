@@ -5,19 +5,20 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs, stripVTControlCharacters } from "node:util";
-import { createExtensionRuntime } from "../../../packages/coding-agent/src/core/extensions/loader.ts";
 import { findInitialModel } from "../../../packages/coding-agent/src/core/model-resolver.ts";
 import { createAgentSession } from "../../../packages/coding-agent/src/core/sdk.ts";
 import { SessionManager } from "../../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../../packages/coding-agent/src/core/settings-manager.ts";
 import { takeOverStdout } from "../../../packages/coding-agent/src/core/output-guard.ts";
 import { styleInfo, styleReviewMarker } from "../../branding.mjs";
+import { askUserTool } from "../../extensions/ask-user.mjs";
 import { reviewSystemPrompt } from "../../extensions/review.mjs";
 import { runSandboxAcp } from "./acp.mjs";
 import { manageSkillTrust } from "./acp-skills.mjs";
 import { hostModel } from "./host-model.mjs";
 import { httpsReadTool } from "./https-read.mjs";
 import { projectDomains } from "./project-domains.mjs";
+import { finalizedQuestionText, sandboxQuestionExtensions, terminalQuestion } from "./questions.mjs";
 import { openSeatbelt } from "./seatbelt.mjs";
 import { runSandboxRpc } from "./rpc.mjs";
 import { toolDefinitions } from "./tools.mjs";
@@ -62,8 +63,7 @@ function terminalApproval(input, workspace, closed) {
 	};
 }
 
-function emptyResources() {
-	const extensions = { extensions: [], errors: [], runtime: createExtensionRuntime() };
+function sandboxResources(extensions) {
 	return {
 		getExtensions: () => extensions,
 		getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -195,7 +195,7 @@ async function launch() {
 		}
 		const { managedProviders } = host;
 		if (metadataOnly) return { runtime, model, defaultThinkingLevel, managedProviders };
-		const newSession = (cwd, sandbox, sessionManager, currentModel, extras = []) => {
+		const newSession = async (cwd, sandbox, sessionManager, currentModel, extras = [], presentQuestion) => {
 			const settingsManager = SettingsManager.inMemory({
 				defaultProvider, defaultModel, defaultThinkingLevel, blockImages: true,
 				...((rpc || acp) ? { compaction: { enabled: false }, retry: { enabled: false } } : {}),
@@ -208,22 +208,25 @@ async function launch() {
 				},
 			}));
 			customTools.push(...extras);
+			const tools = customTools.map(({ name }) => name);
+			if (!values["no-tools"]) tools.push(askUserTool.name);
+			const extensions = await sandboxQuestionExtensions(cwd, !values["no-tools"], presentQuestion, () => Boolean(presentQuestion));
 			return createAgentSession({
 				cwd, agentDir: host.agentDir, modelRuntime: runtime, model: currentModel || undefined,
-				settingsManager, resourceLoader: emptyResources(), sessionManager,
-				tools: customTools.map(({ name }) => name), customTools,
+				settingsManager, resourceLoader: sandboxResources(extensions), sessionManager,
+				tools, customTools,
 			});
 		};
 		return { workspace, runtime, model, newSession, defaultThinkingLevel, managedProviders,
 			...(acp ? { runProjectSkill: initial.executeReadOnly ?? initial.execute } : {}),
-			createSession: (manager, currentModel, permission) => newSession(workspace, permission ? {
+			createSession: (manager, currentModel, permission, presentQuestion) => newSession(workspace, permission ? {
 				execute: (name, args, signal) => {
 					// Bash stays read-only in both modes, including any surviving child process.
 					const execute = permission.mode === "auto-accept-edits" && (name === "edit" || name === "write")
 						? initial.execute : initial.executeReadOnly;
 					return execute(name, args, signal);
 				},
-			} : initial, manager, currentModel) };
+			} : initial, manager, currentModel, [], presentQuestion) };
 	}
 	try {
 		if (acp) return await runSandboxAcp({ home, prepare, wireWrite, permissionCeiling });
@@ -247,7 +250,7 @@ async function launch() {
 			]) : manager;
 			return newSession(cwd, sandbox, sessionManager, model, [
 				httpsReadTool(terminalApproval(input, cwd, closed.signal), projectDomains(home, cwd).has),
-			]);
+			], (question, signal) => terminalQuestion(input, closed.signal, question, signal));
 		}
 		const { session } = await createSession(workspace, initial);
 		const state = { workspace, sandbox: initial, session };
@@ -327,6 +330,8 @@ async function readCommands(state, home, runtime, model, input, createSession) {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			if (event.message.errorMessage) console.error(display(event.message.errorMessage));
 			process.stdout.write("\n");
+			const question = finalizedQuestionText(event);
+			if (question) console.log(question.text);
 		}
 	}
 	let unsubscribe = state.session.subscribe(onEvent);
