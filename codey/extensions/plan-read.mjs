@@ -12,7 +12,14 @@ export const planTools = [
 	{ name: "plan_read", description: "Read a small UTF-8 text file at a workspace-relative path.", parameters: pathSchema },
 ];
 
-export async function inspectPlanPath(root, name, args) {
+export class PlanDataLimit extends Error {}
+
+function charge(budget, size) {
+	if (size > budget.remaining) throw new PlanDataLimit();
+	budget.remaining -= size;
+}
+
+export async function inspectPlanPath(root, name, args, budget) {
 	if (!planTools.some((tool) => tool.name === name)) throw new Error("Tool unavailable in Plan mode.");
 	const input = args?.path;
 	if (typeof input !== "string" || input.length > 512 || Object.keys(args).length !== 1 || /[:\\\x00-\x1f\x7f]/.test(input)) {
@@ -29,28 +36,44 @@ export async function inspectPlanPath(root, name, args) {
 		const directory = await opendir(path);
 		const visible = [];
 		let scanned = 0;
-		for await (const entry of directory) {
-			if (++scanned > 256 || visible.length >= 80) { visible.push("… listing truncated"); break; }
-			if (!protectedName.test(entry.name) && !/[\\\x00-\x1f\x7f]/.test(entry.name)) {
-				if (entry.isDirectory()) visible.push(`${entry.name}/`);
-				else if (entry.isFile()) visible.push(entry.name);
+		function add(entry) {
+			const bytes = Buffer.byteLength(entry) + (visible.length ? 1 : 0);
+			if (bytes > budget.remaining) {
+				budget.remaining = 0;
+				return;
 			}
+			budget.remaining -= bytes;
+			visible.push(entry);
+		}
+		for await (const entry of directory) {
+			if (++scanned > 256 || visible.length >= 80) { add("… listing truncated"); break; }
+			if (!protectedName.test(entry.name) && !/[\\\x00-\x1f\x7f]/.test(entry.name)) {
+				if (entry.isDirectory()) add(`${entry.name}/`);
+				else if (entry.isFile()) add(entry.name);
+			}
+			if (budget.remaining === 0) break;
 		}
 		if (await realpath(path) !== path) throw new Error("Path changed during Plan inspection.");
-		return visible.join("\n") || "No visible files.";
+		if (visible.length === 0) add("No visible files.");
+		if (visible.length === 0) throw new PlanDataLimit();
+		return visible.join("\n");
 	}
 	const original = await lstat(path);
 	if (!original.isFile() || original.nlink !== 1 || original.size > limit) throw new Error("Plan can read only small, regular text files.");
+	if (original.size > budget.remaining) throw new PlanDataLimit();
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = await file.stat();
 		if (stat.ino !== original.ino || stat.dev !== original.dev || stat.nlink !== 1 || await realpath(path) !== path) {
 			throw new Error("Path changed during Plan inspection.");
 		}
-		const buffer = Buffer.alloc(limit + 1);
+		if (stat.size > limit) throw new Error("Plan can read only small, regular text files.");
+		if (stat.size > budget.remaining) throw new PlanDataLimit();
+		const buffer = Buffer.alloc(stat.size);
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+		charge(budget, bytesRead);
 		const bytes = buffer.subarray(0, bytesRead);
-		if (bytesRead > limit || bytes.includes(0)) throw new Error("Plan can read only small, regular text files.");
+		if (bytes.includes(0)) throw new Error("Plan can read only small, regular text files.");
 		return decoder.decode(bytes);
 	} finally {
 		await file.close();
