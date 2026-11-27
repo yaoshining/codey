@@ -1,0 +1,47 @@
+name: Verify Codey model limits on macOS
+on:
+  push:
+    branches: [verify/codey-provider-model-limits]
+    paths: [.github/workflows/codey-provider-model-limits.yml]
+permissions:
+  contents: read
+jobs:
+  acp:
+    runs-on: macos-26-intel
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: d3ee9ee82658c979f0786960d1522fb910e23814
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Verify Codey revision and perform fixed install in a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = d3ee9ee82658c979f0786960d1522fb910e23814
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh d3ee9ee82658c979f0786960d1522fb910e23814
+          git -C "$RUNNER_TEMP/codey-installed/d3ee9ee82658c979f0786960d1522fb910e23814" rev-parse HEAD
+      - name: Prepare pinned real T3 Local command adapter
+        run: |
+          git init --quiet "$RUNNER_TEMP/t3"
+          git -C "$RUNNER_TEMP/t3" fetch --quiet --depth 1 https://github.com/yaoshining/t3code.git a22a4f9bba5d3e93ef673014549f83fd915f9677
+          git -C "$RUNNER_TEMP/t3" checkout --quiet --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/t3" rev-parse HEAD
+          test "$(git -C "$RUNNER_TEMP/t3" rev-parse HEAD)" = a22a4f9bba5d3e93ef673014549f83fd915f9677
+          (cd "$RUNNER_TEMP/t3" && CI=true npx --yes --package=pnpm@12.14.0 pnpm --filter @t3tools/provider-acp-registry... --filter @t3tools/provider-testing... install --frozen-lockfile --ignore-scripts)
+          cp codey/sandbox/macos/t3-acp.integration.mjs "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-acp-fixture.mjs"
+          cp "$RUNNER_TEMP/t3/apps/server/src/orchestration-v2/ContextHandoffDelivery.ts" "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-context-handoff-fixture.ts"
+      - name: Test installed Codey ACP and actual T3 Local command adapter
+        run: python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey" "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-acp-fixture.mjs"
+      - name: Regress existing Pi RPC and Seatbelt
+        run: python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
+      - name: Verify real provider menu and captured ordinary and Seatbelt RPC requests
+        run: |
+          python3 -m venv "$RUNNER_TEMP/provider-test-python"
+          "$RUNNER_TEMP/provider-test-python/bin/pip" install 'pexpect==4.9.0'
+          "$RUNNER_TEMP/provider-test-python/bin/python" codey/test/provider-limits.integration.py "$RUNNER_TEMP/codey-bin/codey" --sandbox
