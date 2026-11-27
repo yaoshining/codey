@@ -103,7 +103,19 @@ export async function loginBridge(bridge, ui, isCurrent, { directTls, challenge:
 		});
 		const discovery = { authorizationServerUrl: issuer, authorizationServerMetadata, resourceMetadata };
 		const binding = bindingFor(resource, discovery);
-		const scope = challenge.scope || resourceMetadata.scopes_supported?.join(" ");
+		let scope = challenge.scope || resourceMetadata.scopes_supported?.join(" ");
+		// Vercel advertises the refresh scope at its issuer, independently of MCP resource scopes.
+		const vercelRenewal = directTls && !bridge.pem && resource.href === "https://mcp.vercel.com/" &&
+			(!metadataUrl || metadataUrl.origin === resource.origin) &&
+			binding.issuer.href === "https://vercel.com/" &&
+			binding.browser.href === "https://vercel.com/oauth/authorize" &&
+			binding.registration.href === "https://api.vercel.com/login/oauth/register" &&
+			binding.token.href === "https://api.vercel.com/login/oauth/token" &&
+			authorizationServerMetadata.scopes_supported?.includes("offline_access") &&
+			authorizationServerMetadata.grant_types_supported?.includes("refresh_token");
+		if (vercelRenewal && !scope?.split(" ").includes("offline_access")) {
+			scope = [scope, "offline_access"].filter(Boolean).join(" ");
+		}
 		const destinations = [
 			["Browser sign-in page", binding.browser],
 			["Codey client registration", binding.registration],
@@ -114,6 +126,7 @@ export async function loginBridge(bridge, ui, isCurrent, { directTls, challenge:
 			`MCP resource: ${resource.href}`,
 			...external.map(([role, { origin, pathname }]) => `${role}: ${origin}${pathname}`),
 			`Scope: ${scope?.replace(/[\p{Cc}\p{Cf}]/gu, " ").slice(0, 240) || "issuer defaults"}`,
+			...(vercelRenewal ? ["Vercel offline_access lets Codey renew this connection after the access token expires."] : []),
 		].join("\n"))) return false;
 		deadline.throwIfAborted();
 		const callback = await OAuthCallbackServer.listen({ host: "127.0.0.1", path: "/callback", timeoutMs: 180_000,
@@ -127,6 +140,7 @@ export async function loginBridge(bridge, ui, isCurrent, { directTls, challenge:
 			await authorizeMcp(provider, { ...options, skipRefresh: true });
 			if (!browserUrl || browserUrl.origin !== binding.browser.origin || browserUrl.pathname !== binding.browser.pathname ||
 				browserUrl.searchParams.get("redirect_uri") !== callback.redirectUrl) throw new Error("The OAuth browser destination changed.");
+			if (vercelRenewal) browserUrl.searchParams.set("prompt", "consent");
 			const authorization = { kind: "redirect", authorizationUrl: browserUrl.href, redirectUrl: callback.redirectUrl,
 				state: await provider.state(), scope };
 			const response = await waitForLoopbackSignIn({ callback, authorization, signal: deadline,
@@ -149,6 +163,9 @@ export async function loginBridge(bridge, ui, isCurrent, { directTls, challenge:
 				if (!isCurrent()) throw new Error("This bridge changed during sign-in.");
 				store.save(state);
 			});
+			if (vercelRenewal && !state.tokens.refresh_token) {
+				ui.notify("Vercel did not issue a refresh token. This sign-in will need browser approval again when it expires.", "warning");
+			}
 			return true;
 		} finally { await callback.close(); }
 	} finally { await network.close(); }
