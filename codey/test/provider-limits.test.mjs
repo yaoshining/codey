@@ -3,10 +3,12 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import test from "node:test";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { modelLimitSettings } from "../extensions/provider-limits.mjs";
 import { discoverModelLimits, providerFromProfile } from "../extensions/provider-protocols.mjs";
 
 test("reads only authorized exact-route limits and sends a bounded Responses budget", async (t) => {
 	const route = "vendor/fixture";
+	const qualified = "openai/gpt-6.2-sol";
 	const requests = [];
 	const server = createServer(async (request, response) => {
 		const { url } = request;
@@ -20,11 +22,12 @@ test("reads only authorized exact-route limits and sends a bounded Responses bud
 		}
 		requests.push({ url, headers: request.headers });
 		const send = (data) => response.setHeader("Content-Type", "application/json").end(JSON.stringify({ data }));
-		if (url === "/v1/models") send([{ id: route, max_input_tokens: 999999, max_tokens: 999999 }]);
+		if (url === "/v1/models") send([{ id: route, max_tokens: 999999 }, { id: qualified }]);
 		else if (url === "/v1/model/info") send([
 			{ model_name: "fixture", model_info: { context_window: 9000000, max_output_tokens: 9000000 } },
 			{ model_name: route, model_info: { context_window: 128000, max_output_tokens: 8192, max_input_tokens: 80000 } },
 			{ model_name: route, model_info: { context_window: 160000, max_output_tokens: 16384, ignored_secret: "not-persisted" } },
+			{ model_name: qualified, model_info: { max_input_tokens: 922000, max_output_tokens: 128000 } },
 		]);
 		else if (url === "/plain/models") send([{ id: route, max_input_tokens: 300000, max_tokens: 999999, context_window: "128000", max_output_tokens: -1 }]);
 		else if (url === "/plain/model/info") response.writeHead(302, { Location: "/never" }).end();
@@ -44,10 +47,13 @@ test("reads only authorized exact-route limits and sends a bounded Responses bud
 	});
 	assert.deepEqual((await discoverModelLimits(profile, "unmatched/" + route)).limits, {});
 	const plain = await discoverModelLimits({ ...profile, baseUrl: origin + "/plain" }, route);
-	assert.deepEqual(plain.limits, {});
+	assert.deepEqual(plain.limits, { maxInputTokens: { value: 300000, source: "Model catalog" } });
 	assert.match(plain.reason, /redirected/);
 	const claude = await discoverModelLimits({ ...profile, api: "anthropic-messages", baseUrl: origin + "/claude" }, route);
-	assert.deepEqual(claude.limits, { maxTokens: { value: 8192, source: "Anthropic model catalog" } });
+	assert.deepEqual(claude.limits, {
+		maxInputTokens: { value: 200000, source: "Model catalog" },
+		maxTokens: { value: 8192, source: "Anthropic model catalog" },
+	});
 	assert.match(claude.reason, /401/);
 	assert.ok(!requests.some(({ url }) => url === "/never"));
 	assert.ok(requests.filter(({ url }) => !url.startsWith("/claude")).every(({ headers }) => headers.authorization === "Bearer fixture-key"));
@@ -57,6 +63,37 @@ test("reads only authorized exact-route limits and sends a bounded Responses bud
 	const message = (content) => ({ messages: [{ role: "user", content, timestamp: 1 }] });
 	const long = message("x".repeat(111552));
 	assert.equal(estimateContextTokens(long).tokens, 31872);
+	const gateway = (await discoverModelLimits(profile, qualified)).limits;
+	const qualifiedProfile = { ...profile, models: [qualified], modelLimits: { [qualified]: { detected: gateway } } };
+	assert.deepEqual(modelLimitSettings(qualifiedProfile, qualified), {
+		contextWindow: { value: 1050000, source: "Models.dev" },
+		maxTokens: { value: 128000, source: "Gateway model info" },
+		maxInputTokens: { value: 922000, source: "Gateway model info" },
+	});
+	assert.deepEqual(modelLimitSettings(profile, qualified, {
+		manual: { contextWindow: 500000, maxInputTokens: 420000, maxTokens: 30000 },
+		detected: { contextWindow: { value: 600000, source: "Gateway model info" }, ...gateway },
+	}), {
+		contextWindow: { value: 500000, source: "Manual" },
+		maxTokens: { value: 30000, source: "Manual" },
+		maxInputTokens: { value: 420000, source: "Manual" },
+	});
+	assert.deepEqual(modelLimitSettings(profile, qualified, {
+		detected: { contextWindow: { value: 600000, source: "Gateway model info" } },
+	}).contextWindow, { value: 600000, source: "Gateway model info" });
+	for (const id of ["gpt-6.2-sol", "anthropic/gpt-6.2-sol", "openrouter/openai/gpt-6.2-sol", "openai/my-sol", "OpenAI/gpt-6.2-sol"]) {
+		assert.equal(modelLimitSettings(profile, id).contextWindow.value, 32000, id);
+	}
+	const astra = modelLimitSettings(profile, "openai/gpt-6.2-astra");
+	assert.deepEqual(Object.values(astra).map(({ value, source }) => [value, source]), [
+		[1050000, "Models.dev"], [128000, "Models.dev"], [922000, "Models.dev"],
+	]);
+	const merged = providerFromProfile(qualifiedProfile);
+	const [mergedModel] = merged.getModels();
+	const mergedReply = await merged.streamSimple(mergedModel, long, {}).result();
+	assert.notEqual(mergedReply.stopReason, "error", mergedReply.errorMessage);
+	assert.equal(requests.at(-1).body.max_output_tokens, 128000);
+	assert.equal(requests.at(-1).body.model, qualified);
 	for (const [provider, context, expected] of [
 		[plainProvider, message("short"), 4096], [plainProvider, long, 16],
 		[configured, long, 12000],

@@ -8,7 +8,7 @@ import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
 import { authentication, discoverModelLimits, discoverModels, modelInfoUrl, protocols, providerFromProfile, supportedEffortValues, validModelId } from "./provider-protocols.mjs";
 import { providerIdentity, providerKey, providerStore } from "./provider-store.mjs";
 import { providerEndpoint } from "./provider-endpoint.mjs";
-import { limitFields, modelLimitSettings, validModelLimit, validateModelLimits } from "./provider-limits.mjs";
+import { limitFields, modelLimitSettings, validModelLimit, validateModelLimits, withCatalogReference } from "./provider-limits.mjs";
 
 function hostStore(cwd) {
 	const home = realpathSync(homedir());
@@ -116,7 +116,7 @@ async function chooseModels(ui, initial, profile) {
 		if (action === undefined) return undefined;
 		if (action === "Keep selections and continue") {
 			if (selected.length) return { models: selected, modelLimits: validateModelLimits({ ...profile, models: selected },
-				Object.fromEntries(selected.map((model) => [model, limitsFor(model)]))) };
+				Object.fromEntries(selected.map((model) => [model, withCatalogReference(model, limitsFor(model))]))) };
 			ui.notify("Select or enter at least one model ID.", "warning");
 		} else if (action === "Configure model limits") {
 			const model = await ui.select("Choose a model for token limits", selected);
@@ -161,7 +161,7 @@ const limitActions = new Map(Object.entries(limitFields).map(([field, label]) =>
 
 function limitSummary(profile, model, settings) {
 	return Object.entries(modelLimitSettings(profile, model, settings)).map(([field, { value, source, capped }]) =>
-		`${limitFields[field]}: ${value} tokens (${source}${capped ? ", capped by context" : ""})`).join("\n");
+		`${limitFields[field]}: ${value === undefined ? source : `${value} tokens (${source}${capped ? ", capped by context" : ""})`}`).join("\n");
 }
 
 async function editLimits(ui, profile, model, initial) {
@@ -176,8 +176,8 @@ async function editLimits(ui, profile, model, initial) {
 			if (!await ui.confirm("Read limits from the configured gateway?",
 				`${profile.baseUrl}${protocols.get(profile.api).catalog}\nIf needed: ${modelInfoUrl(profile).href}\nNo inference request will be sent.`)) continue;
 			const result = await discoverModelLimits(profile, model);
-			limits = { ...limits, detected: result.limits };
-			if (result.reason) ui.notify(`${result.reason} Missing limits remain unknown.`, "warning");
+			limits = { ...limits, detected: result.complete ? result.limits : { ...limits.detected, ...result.limits } };
+			if (result.reason) ui.notify(result.reason, "warning");
 			continue;
 		}
 		const field = limitActions.get(action);
@@ -350,7 +350,7 @@ export default function customProviders(pi) {
 			const original = Object.hasOwn(profile.modelLimits ?? {}, model) ? profile.modelLimits[model] : undefined;
 			const limits = await editLimits(ui, profile, model, original);
 			if (!limits) return;
-			const modelLimits = validateModelLimits(profile, { ...profile.modelLimits, [model]: limits });
+			const modelLimits = validateModelLimits(profile, { ...profile.modelLimits, [model]: withCatalogReference(model, limits) });
 			const draft = { ...profile };
 			if (Object.keys(modelLimits).length) draft.modelLimits = modelLimits;
 			else delete draft.modelLimits;

@@ -18,7 +18,8 @@ import pexpect
 ROOT = Path(__file__).resolve().parents[1]
 Rpc = runpy.run_path(str(ROOT / "sandbox/macos/rpc.integration.py"))["Rpc"]
 ResponsesGateway = runpy.run_path(str(Path(__file__).with_name("provider-reasoning.integration.py")))["Gateway"]
-ROUTE = "vendor/fixture"
+ROUTE = "openai/gpt-6.2-sol"
+ASTRA = "openai/gpt-6.2-astra"
 
 
 class Terminal(pexpect.spawn):
@@ -34,15 +35,15 @@ class Terminal(pexpect.spawn):
 
 
 class Gateway(ResponsesGateway):
-    output = 8192
+    output = 128000
     catalogs = []
 
     def do_GET(self):
         self.catalogs.append((self.path, self.headers.get("Authorization")))
         if self.path == "/v1/models":
-            data = [{"id": ROUTE, "max_input_tokens": 80000, "max_tokens": 50000}]
+            data = [{"id": ROUTE}, {"id": ASTRA}]
         elif self.path == "/v1/model/info":
-            data = [{"model_name": ROUTE, "model_info": {"context_window": 128000, "max_output_tokens": self.output}}]
+            data = [{"model_name": ROUTE, "model_info": {"max_input_tokens": 922000, "max_output_tokens": self.output}}]
         elif self.path == "/new/v1/models":
             data = [{"id": "new-route", "context_window": 64000, "max_output_tokens": 6000}]
         else:
@@ -63,7 +64,7 @@ def run(binary, include_sandbox=False):
         project.mkdir()
         origin = f"http://127.0.0.1:{server.server_port}"
         original = {"id": "relay", "displayName": "Relay", "api": "openai-responses", "baseUrl": origin + "/v1",
-                    "auth": "key", "key": "fixture-limit-key", "models": [ROUTE, "unlisted"],
+                    "auth": "key", "key": "fixture-limit-key", "models": [ROUTE, ASTRA, "unlisted"],
                     "reasoningLevels": {ROUTE: ["low", "high"]}}
         file = folder / "relay.json"
         file.write_text(json.dumps(original))
@@ -101,7 +102,7 @@ def run(binary, include_sandbox=False):
             def save(confirm=True):
                 original_bytes = file.read_bytes()
                 tty.expect_exact("Keep model limits")
-                enter(down=3)
+                enter(down=4)
                 tty.expect_exact("Save token limits for")
                 tty.expect_exact("Save model limits")
                 tty.expect_exact("\x1b[?2026l")
@@ -123,15 +124,19 @@ def run(binary, include_sandbox=False):
             tty.expect_exact("\x1b[?2026l")
             time.sleep(.75)
             configure()
-            tty.expect_exact("Unknown")
+            tty.expect_exact("Context window: 1050000 tokens (Models.dev)")
+            tty.expect_exact("Output limit: 128000 tokens (Models.dev)")
+            tty.expect_exact("Input limit: 922000 tokens (Models.dev)")
+            assert not Gateway.catalogs
             refresh()
-            tty.expect_exact("Output limit: 8192 tokens (Gateway model info)")
+            tty.expect_exact("Output limit: 128000 tokens (Gateway model info)")
+            tty.expect_exact("Input limit: 922000 tokens (Gateway model info)")
             save(False)
             assert json.loads(file.read_text()) == original
 
             configure()
             refresh()
-            tty.expect_exact("Output limit: 8192 tokens (Gateway model info)")
+            tty.expect_exact("Output limit: 128000 tokens (Gateway model info)")
             enter(down=2)
             tty.expect_exact("Output limit in tokens")
             enter("10000")
@@ -151,8 +156,11 @@ def run(binary, include_sandbox=False):
             tty.expect_exact("Output limit: 10000 tokens (Manual)")
             save()
             stored = json.loads(file.read_text())
-            assert stored["modelLimits"][ROUTE] == {
-                "detected": {"contextWindow": {"value": 128000, "source": "Gateway model info"},
+            saved_limits = stored["modelLimits"][ROUTE]
+            snapshot = json.loads((ROOT / "catalog/model-limits.json").read_text())
+            assert saved_limits == {
+                "modelsDevRevision": snapshot["revision"],
+                "detected": {"maxInputTokens": {"value": 922000, "source": "Gateway model info"},
                              "maxTokens": {"value": 6000, "source": "Gateway model info"}},
                 "manual": {"contextWindow": 144000, "maxTokens": 10000},
             }
@@ -205,6 +213,10 @@ def run(binary, include_sandbox=False):
                 models = rpc.request("get_available_models")["models"]
                 actual = next(item for item in models if item["provider"] == "relay" and item["id"] == ROUTE)
                 assert (actual["contextWindow"], actual["maxTokens"]) == (144000, 6000), actual
+                astra = next(item for item in models if item["provider"] == "relay" and item["id"] == ASTRA)
+                assert (astra["contextWindow"], astra["maxTokens"]) == (1050000, 128000), astra
+                unknown = next(item for item in models if item["provider"] == "relay" and item["id"] == "unlisted")
+                assert (unknown["contextWindow"], unknown["maxTokens"]) == (32000, 4096), unknown
                 assert not actual.get("baseUrl") and "fixture-limit-key" not in json.dumps(actual)
                 assert actual["thinkingLevelMap"]["high"] == "high"
                 rpc.request("set_model", provider="relay", modelId=ROUTE)

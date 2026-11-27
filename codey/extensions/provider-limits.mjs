@@ -1,6 +1,9 @@
-// Per-route limits from explicit metadata and user overrides.
-export const limitFields = { contextWindow: "Context window", maxTokens: "Output limit" };
+// Per-route limits from user overrides, the gateway and the bundled canonical catalog.
+import catalog from "../catalog/model-limits.json" with { type: "json" };
+
+export const limitFields = { contextWindow: "Context window", maxTokens: "Output limit", maxInputTokens: "Input limit" };
 const defaults = { contextWindow: 32_000, maxTokens: 4_096 };
+const catalogFields = { contextWindow: "context", maxTokens: "output", maxInputTokens: "input" };
 const sources = new Set(["Model catalog", "Anthropic model catalog", "Gateway model info"]);
 const fields = Object.keys(limitFields);
 const maxSupported = 10_000_000;
@@ -8,6 +11,13 @@ const record = (value) => value !== null && typeof value === "object" && !Array.
 const validLimit = (value) => Number.isSafeInteger(value) && value > 0 && value <= maxSupported;
 export const validModelLimit = (value, api) => validLimit(value) && (api !== "openai-responses" || value >= 16);
 const ownValue = (object, key) => Object.hasOwn(object ?? {}, key) ? object[key] : undefined;
+
+export function withCatalogReference(model, limits) {
+	// The route is the catalog key. The revision records the snapshot used at save time.
+	const settings = { ...limits };
+	delete settings.modelsDevRevision;
+	return ownValue(catalog.models, model) ? { ...settings, modelsDevRevision: catalog.revision } : settings;
+}
 
 export function readCatalogLimits(entry, api, info = false) {
 	const meta = info ? entry?.model_info : entry;
@@ -17,6 +27,7 @@ export function readCatalogLimits(entry, api, info = false) {
 		["contextWindow", meta.context_window, source],
 		["contextWindow", meta.context_length, source],
 		["maxTokens", meta.max_output_tokens, source],
+		["maxInputTokens", meta.max_input_tokens, source],
 	];
 	if (!info && validLimit(meta.context_length)) {
 		candidates.push(["maxTokens", meta.top_provider?.max_completion_tokens, source]);
@@ -31,6 +42,7 @@ export function readCatalogLimits(entry, api, info = false) {
 		}
 	}
 	if (limits.contextWindow && limits.maxTokens?.value > limits.contextWindow.value) delete limits.maxTokens;
+	if (limits.contextWindow && limits.maxInputTokens?.value > limits.contextWindow.value) delete limits.maxInputTokens;
 	return limits;
 }
 
@@ -48,11 +60,16 @@ export function mergeReportedLimits(left = {}, right = {}) {
 }
 
 export function modelLimitSettings(profile, model, settings = ownValue(profile.modelLimits, model)) {
+	const canonical = ownValue(catalog.models, model);
 	const limits = Object.fromEntries(fields.map((field) => {
 		const override = settings?.manual?.[field];
-		const detected = settings?.detected?.[field];
-		return [field, validLimit(override) ? { value: override, source: "Manual" } :
-			detected ?? { value: defaults[field], source: "Unknown · compatibility default" }];
+		if (validModelLimit(override, profile.api)) return [field, { value: override, source: "Manual" }];
+		const gateway = settings?.detected?.[field];
+		if (gateway) return [field, gateway];
+		const value = canonical?.[catalogFields[field]];
+		if (validModelLimit(value, profile.api)) return [field, { value, source: "Models.dev" }];
+		return [field, defaults[field] === undefined ? { source: "Unknown" } :
+			{ value: defaults[field], source: "Unknown · compatibility default" }];
 	}));
 	const output = limits.maxTokens;
 	if (output.value > limits.contextWindow.value) {
@@ -66,6 +83,12 @@ export function validateModelLimits(profile, settings = {}) {
 	return Object.fromEntries(Object.entries(settings).map(([model, limits]) => {
 		if (!profile.models.includes(model) || !record(limits)) throw new Error("Invalid model limits.");
 		const checked = {};
+		if (limits.modelsDevRevision !== undefined) {
+			if (typeof limits.modelsDevRevision !== "string" || !/^[0-9a-f]{40}$/.test(limits.modelsDevRevision)) {
+				throw new Error("Invalid model catalog revision.");
+			}
+			checked.modelsDevRevision = limits.modelsDevRevision;
+		}
 		for (const kind of ["detected", "manual"]) {
 			if (limits[kind] === undefined) continue;
 			if (!record(limits[kind])) throw new Error("Invalid model limits.");
