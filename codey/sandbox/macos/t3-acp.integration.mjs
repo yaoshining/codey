@@ -248,9 +248,9 @@ const handoff = Effect.gen(function* () {
 
 const questions = localCommand((runtime) => Effect.gen(function* () {
 	const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
-	assert.equal(yield* send(runtime, thread, "option fixture", 1, { reply: "markdown", expected: "CONFIRMED_ANSWER" }), "completed");
-	assert.equal(yield* send(runtime, thread, "custom fixture", 2, { reply: "CSV please", expected: "CONFIRMED_ANSWER" }), "completed");
-	assert.equal(yield* send(runtime, thread, "mixed fixture", 3, { expected: "No action was taken." }), "completed");
+	assert.equal(yield* send(runtime, thread, "CODEY_ASK_FIXTURE_OPTION", 1, { reply: "markdown", expected: "CONFIRMED_ANSWER" }), "completed");
+	assert.equal(yield* send(runtime, thread, "CODEY_ASK_FIXTURE_CUSTOM", 2, { reply: "CSV please", expected: "CONFIRMED_ANSWER" }), "completed");
+	assert.equal(yield* send(runtime, thread, "CODEY_ASK_FIXTURE_MIXED", 3, { expected: "No action was taken." }), "completed");
 	console.log("PASS: pinned T3 Local ACP renders separate question items, returns explicit choice and custom answers, and receives mixed-batch rejection as text.");
 }));
 

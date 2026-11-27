@@ -40,14 +40,14 @@ class Gateway(BaseHTTPRequestHandler):
         if results:
             assert len(results) == 1 and results[0]["status"] == "answered", results
             content = results[0]["answer"]
-            assert content == ({"kind": "custom", "text": "CSV please"} if "custom" in prompt else
+            assert content == ({"kind": "custom", "text": "CSV please"} if "CODEY_ASK_FIXTURE_CUSTOM" in prompt else
                                {"kind": "option", "optionId": "markdown"}), results
             delta = {"content": "CONFIRMED_ANSWER"}
         elif prompt != "1":
             calls = [("ask_user", question)]
-            if "mixed" in prompt:
+            if "CODEY_ASK_FIXTURE_MIXED" in prompt:
                 calls.insert(0, ("write", {"path": "unexpected.txt", "content": "never written"}))
-            if "parallel" in prompt:
+            if "CODEY_ASK_FIXTURE_PARALLEL" in prompt:
                 calls.append(("ask_user", question))
             delta = {"tool_calls": [
                 {"index": i, "id": f"call_{len(self.requests)}_{i}", "type": "function",
@@ -86,7 +86,7 @@ def terminal(binary, project, env):
         tty.sendline(stale)
         tty.expect_exact("Question canceled.")
         tty.expect_exact("codey-sandbox> ")
-        tty.sendline("custom fixture")
+        tty.sendline("CODEY_ASK_FIXTURE_CUSTOM")
         tty.expect_exact("Choose a number")
         tty.sendline("3")
         tty.expect_exact("Your answer:")
@@ -96,7 +96,7 @@ def terminal(binary, project, env):
         tty.sendline(tty.match.group(1))
         tty.expect_exact("CONFIRMED_ANSWER")
         tty.expect_exact("codey-sandbox> ")
-        tty.sendline("mixed fixture")
+        tty.sendline("CODEY_ASK_FIXTURE_MIXED")
         tty.expect_exact("No action was taken.")
         tty.expect_exact("codey-sandbox> ")
         assert len(Gateway.requests) == 5
@@ -107,7 +107,8 @@ def terminal(binary, project, env):
 def pi_rpc(binary, project, env):
     with Rpc(binary, ["--sandbox=workspace-write", "--mode", "rpc", "--no-session"], project, env) as client:
         for prompt, expected in [("question", "Reply with a choice"), ("1", "BARE_INPUT_AS_MESSAGE"),
-                                 ("mixed fixture", "No action was taken."), ("parallel", "No action was taken.")]:
+                                 ("CODEY_ASK_FIXTURE_MIXED", "No action was taken."),
+                                 ("CODEY_ASK_FIXTURE_PARALLEL", "No action was taken.")]:
             before = len(Gateway.requests)
             start = len(client.seen)
             client.request("prompt", message=prompt)
@@ -124,7 +125,7 @@ def acp(binary, project, env):
         client.initialize()
         session = client.request("session/new", cwd=str(project), mcpServers=[])["sessionId"]
         for prompt, expected in [("question", "Reply with a choice"), ("1", "BARE_INPUT_AS_MESSAGE"),
-                                 ("mixed fixture", "No action was taken.")]:
+                                 ("CODEY_ASK_FIXTURE_MIXED", "No action was taken.")]:
             before = len(Gateway.requests)
             start = len(client.seen)
             result = client.request("session/prompt", sessionId=session, prompt=[{"type": "text", "text": prompt}])
@@ -166,7 +167,7 @@ def acp(binary, project, env):
         answer(fresh, {old_field: "markdown"})
         finish(102, "end_turn")
         assert len(Gateway.requests) == before + 2
-        fresh, new_field = start("custom fixture", 103)
+        fresh, new_field = start("CODEY_ASK_FIXTURE_CUSTOM", 103)
         answer(stale, {old_field: "markdown"})
         answer(fresh, {new_field + "__other": "CSV please"})
         finish(103, "end_turn")
