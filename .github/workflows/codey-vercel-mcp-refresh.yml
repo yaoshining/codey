@@ -1,0 +1,38 @@
+name: Verify Codey Vercel MCP renewal on macOS
+on:
+  push:
+    branches: [verify/codey-vercel-mcp-refresh]
+    paths: [.github/workflows/codey-vercel-mcp-refresh.yml]
+permissions:
+  contents: read
+jobs:
+  oauth:
+    runs-on: macos-26-intel
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 5ac0dbf74aca9491d0c5e5eba51b76b39953a585
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Verify Codey revision and perform fixed install in a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 5ac0dbf74aca9491d0c5e5eba51b76b39953a585
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 5ac0dbf74aca9491d0c5e5eba51b76b39953a585
+          git -C "$RUNNER_TEMP/codey-installed/5ac0dbf74aca9491d0c5e5eba51b76b39953a585" rev-parse HEAD
+      - name: Test direct Vercel login, refusal and rotation with loopback OAuth
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mcp-python"
+          "$RUNNER_TEMP/mcp-python/bin/pip" install 'pexpect==4.9.0'
+          "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-vercel-oauth.integration.py "$RUNNER_TEMP/codey-bin/codey"
+      - name: Regress direct HTTPS, Bridge OAuth and built-in Pi OAuth selection
+        run: |
+          "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-direct.integration.py "$RUNNER_TEMP/codey-bin/codey"
+          "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-bridge-oauth.integration.py "$RUNNER_TEMP/codey-bin/codey"
+          CODEY_TEST_BIN="$RUNNER_TEMP/codey-bin/codey" node --test codey/test/mcp-oauth.test.mjs codey/test/mcp-ca.test.mjs
