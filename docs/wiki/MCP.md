@@ -12,6 +12,8 @@
 
 若服务要求身份验证，添加后会出现 **Open browser to sign in**。也可选 **Later**，之后从 `/mcp` 菜单登录，或运行 `/mcp direct login <名称>`。向导的 OAuth 登录支持动态客户端注册。需要固定客户端或特殊 OAuth 设置的服务可继续使用手工配置。Codey 的信任只适用于保存的 MCP 地址和此服务的同源 OAuth 请求。跨源 OAuth 有独立的确认和 TLS 校验。浏览器使用自己的信任设置，若提示证书错误，应在浏览器外核对并按管理员指引处理后再继续。
 
+直连官方 `https://mcp.vercel.com/` 时，Codey 会在核对 Vercel 授权端点和续期能力后，在现有确认中说明 `offline_access` 的用途。浏览器同意后，Vercel 签发的刷新令牌可在访问令牌到期时自动续期，包括重启后的连接。已有连接如果当初只授予了 `openid`，运行一次 `/mcp direct login <名称>` 并在浏览器重新同意即可升级授权。Vercel 若未签发刷新令牌，访问令牌过期后仍需登录。 [Vercel 授权范围](https://vercel.com/docs/sign-in-with-vercel/scopes-and-permissions) · [Vercel 令牌轮换](https://vercel.com/docs/sign-in-with-vercel/tokens)
+
 向导添加的服务保存在 `~/.codey/agent/mcp-direct`。证书更换需要重新核对。运行 `/mcp direct remove <名称>` 删除旧条目和该服务的本地授权，再用向导添加。此流程不会更改钥匙串或现有手工 MCP 配置。
 
 ## 添加无需登录的本机或局域网 HTTP 服务
