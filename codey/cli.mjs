@@ -3,6 +3,7 @@ import { setupCli } from "../packages/coding-agent/src/cli/setup.ts";
 import { VERSION } from "../packages/coding-agent/src/config.ts";
 import { main } from "../packages/coding-agent/src/main.ts";
 import { branding } from "./branding.mjs";
+import askUser from "./extensions/ask-user.mjs";
 import { codeyMcp } from "./extensions/mcp-ca.mjs";
 import plan from "./extensions/plan.mjs";
 import customProviders from "./extensions/provider-ui.mjs";
@@ -26,6 +27,7 @@ async function launch(args) {
 	await main(args, {
 		branding,
 		extensionFactories: [
+			{ name: "codey-ask-user", factory: askUser, builtin: true },
 			{ name: "codey-plan", factory: plan, builtin: true },
 			{ name: "mcp", factory: codeyMcp, builtin: true, replaceable: true },
 			{ name: "codey-provider", factory: customProviders, builtin: true, replaceable: true },
