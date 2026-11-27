@@ -4,6 +4,7 @@ import { VERSION } from "../packages/coding-agent/src/config.ts";
 import { main } from "../packages/coding-agent/src/main.ts";
 import { branding } from "./branding.mjs";
 import { codeyMcp } from "./extensions/mcp-ca.mjs";
+import plan from "./extensions/plan.mjs";
 import customProviders from "./extensions/provider-ui.mjs";
 import review from "./extensions/review.mjs";
 import worktree from "./extensions/worktree.mjs";
@@ -25,6 +26,7 @@ async function launch(args) {
 	await main(args, {
 		branding,
 		extensionFactories: [
+			{ name: "codey-plan", factory: plan, builtin: true },
 			{ name: "mcp", factory: codeyMcp, builtin: true, replaceable: true },
 			{ name: "codey-provider", factory: customProviders, builtin: true, replaceable: true },
 			{ name: "codey-review", factory: review, builtin: true, replaceable: true },

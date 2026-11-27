@@ -7,7 +7,7 @@ Codey 是基于 Pi 的终端编码助手。普通模式用于日常工作。需�
 | 安装、更新、重新打开会话 | [安装与日常命令](Install.md) |
 | 登录、配置 LiteLLM 等自定义网关、选择默认模型 | [登录与模型](Providers.md) |
 | 配置 MCP，解决自签证书或 SAN 错误 | [MCP 与证书](MCP.md) |
-| 审查改动、建立独立工作树，或在 T3 中使用 Codey | [审查、工作树与 T3](Workflow.md) |
+| 只读规划、审查改动、建立工作树，或在 T3 中使用 Codey | [计划、审查、工作树与 T3](Workflow.md) |
 | 限制工具权限、批准单次 HTTPS 请求、维护域名白名单 | [macOS 与 Linux 沙箱](Sandbox.md) |
 
 使用 `codey --help` 查看本机已安装版本支持的选项。项目本地配置继续使用 `.pi`。Codey 用户设置、登录和会话默认保存在 `~/.codey/agent`。
