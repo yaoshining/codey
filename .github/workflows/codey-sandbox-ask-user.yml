@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: c833f152a7dad5a07d0b2b783a3367608043c750
+          ref: 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -23,9 +23,9 @@ jobs:
           uname -m
           node --version
           git rev-parse HEAD
-          test "$(git rev-parse HEAD)" = c833f152a7dad5a07d0b2b783a3367608043c750
-          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh c833f152a7dad5a07d0b2b783a3367608043c750
-          git -C "$RUNNER_TEMP/codey-installed/c833f152a7dad5a07d0b2b783a3367608043c750" rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          git -C "$RUNNER_TEMP/codey-installed/6b20f86254f6fcd86c8a4fbc44374c99e674bbc5" rev-parse HEAD
       - name: Prepare pinned real T3 Local command adapter
         run: |
           git init --quiet "$RUNNER_TEMP/t3"
@@ -41,7 +41,50 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/test-python"
           "$RUNNER_TEMP/test-python/bin/pip" install 'pexpect==4.9.0'
           "$RUNNER_TEMP/test-python/bin/python" codey/sandbox/macos/questions.integration.py "$RUNNER_TEMP/codey-bin/codey" "$RUNNER_TEMP/t3/packages/provider-acp-registry/codey-acp-fixture.mjs"
-      - name: Regress existing ACP and Pi RPC
+  rpc-regression:
+    runs-on: macos-26-intel
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Verify Codey revision and perform fixed install in a synthetic HOME
         run: |
-          python3 codey/sandbox/macos/acp.integration.py "$RUNNER_TEMP/codey-bin/codey"
-          python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          git -C "$RUNNER_TEMP/codey-installed/6b20f86254f6fcd86c8a4fbc44374c99e674bbc5" rev-parse HEAD
+      - name: Regress sandbox Pi RPC
+        run: python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
+  terminal-regression:
+    runs-on: macos-26-intel
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Verify Codey revision and perform fixed install in a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          node --version
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 6b20f86254f6fcd86c8a4fbc44374c99e674bbc5
+          git -C "$RUNNER_TEMP/codey-installed/6b20f86254f6fcd86c8a4fbc44374c99e674bbc5" rev-parse HEAD
+      - name: Regress Seatbelt terminal
+        run: |
+          python3 -m venv "$RUNNER_TEMP/test-python"
+          "$RUNNER_TEMP/test-python/bin/pip" install 'pexpect==4.9.0'
+          "$RUNNER_TEMP/test-python/bin/python" codey/sandbox/macos/integration.py "$RUNNER_TEMP/codey-bin/codey"
