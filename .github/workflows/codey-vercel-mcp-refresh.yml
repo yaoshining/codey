@@ -33,6 +33,8 @@ jobs:
           "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-vercel-oauth.integration.py "$RUNNER_TEMP/codey-bin/codey"
       - name: Regress direct HTTPS, Bridge OAuth and built-in Pi OAuth selection
         run: |
-          "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-direct.integration.py "$RUNNER_TEMP/codey-bin/codey"
+          cert_tool="$(brew --prefix openssl@3)/bin/openssl"
+          "$cert_tool" version
+          CODEY_TEST_OPENSSL="$cert_tool" "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-direct.integration.py "$RUNNER_TEMP/codey-bin/codey"
           "$RUNNER_TEMP/mcp-python/bin/python" codey/test/mcp-bridge-oauth.integration.py "$RUNNER_TEMP/codey-bin/codey"
           CODEY_TEST_BIN="$RUNNER_TEMP/codey-bin/codey" node --test codey/test/mcp-oauth.test.mjs codey/test/mcp-ca.test.mjs
