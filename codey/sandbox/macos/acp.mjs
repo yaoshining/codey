@@ -32,18 +32,26 @@ const modelId = (model) => `${model.provider}/${model.id}`;
 const textContent = (text) => ({ type: "text", text });
 
 function modelCatalog(models, managedProviders, defaultThinking) {
-	return models.map((model) => ({
-		id: modelId(model),
-		name: managedProviders.has(model.provider) ? model.id : model.name,
-		levels: getSupportedThinkingLevels(model),
-		thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
-	}));
+	return models.map((model) => {
+		const displayName = managedProviders.get(model.provider);
+		return {
+			id: modelId(model),
+			name: displayName === undefined ? model.name : model.id,
+			levels: getSupportedThinkingLevels(model),
+			thinking: clampThinkingLevel(model, defaultThinking ?? DEFAULT_THINKING_LEVEL),
+			...(displayName === undefined ? {} : { providerMeta: {
+				"com.github.yaoshining.codey/subProvider": { id: model.provider, displayName },
+			} }),
+		};
+	});
 }
 
 function configOptions(model, thinking, catalog) {
 	if (!model) return [];
 	return [
-		select("model", "Model", "model", model.id, catalog.map(({ id, name }) => ({ value: id, name }))),
+		select("model", "Model", "model", model.id, catalog.map(({ id, name, providerMeta }) => ({
+			value: id, name, ...(providerMeta ? { _meta: providerMeta } : {}),
+		}))),
 		select("thinking", "Thinking", "thought_level", thinking,
 			model.levels.map((level) => ({ value: level, name: level }))),
 	];
@@ -60,6 +68,7 @@ function sessionOptions(model, thinking, catalog) {
 			modelId: entry.id,
 			name: entry.name,
 			_meta: {
+				...entry.providerMeta,
 				reasoningEfforts: entry.levels.map((value) => ({ value, label: value })),
 				reasoningEffort: entry.id === model.id ? thinking : entry.thinking,
 			},
@@ -145,7 +154,7 @@ function skillSelection(blocks, parts, isT3) {
 	const leading = !userText.slice(0, match.index).trim();
 	const args = leading ? userText.slice(match.index + match[0].length).trim() : "";
 	let carriedContext;
-	if (isT3 && match[1] === projectSkillsCommand && leading && !args) {
+	if (isT3) {
 		const instructions = wrapped ? `${block.text.slice(0, end)}\n</t3_code_instructions>` : "";
 		carriedContext = [...parts.slice(0, index), instructions, history, ...parts.slice(index + 1)]
 			.filter((part) => part.trim()).join("\n\n");
@@ -279,6 +288,14 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 		const current = { cancelled: false, skills: new AbortController() };
 		turn = current;
 		const id = active.id;
+		const localReply = async (reply) => {
+			if (current.cancelled) return { stopReason: "cancelled" };
+			if (selection?.carriedContext) await session.sendCustomMessage({
+				customType: "codey-acp-t3-context", content: selection.carriedContext, display: false,
+			});
+			update(id, { sessionUpdate: "agent_message_chunk", content: textContent(reply) });
+			return { stopReason: "end_turn" };
+		};
 		const stop = session.subscribe((event) => {
 			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
 				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(event.assistantMessageEvent.delta) });
@@ -293,21 +310,24 @@ export async function runSandboxAcp({ home, prepare, wireWrite,
 		try {
 			if (selection?.name === projectSkillsCommand && selection.leading && !selection.args) {
 				const { skills, skipped, partial } = await runProjectSkill("acp-skills", {}, current.skills.signal);
-				if (current.cancelled) return { stopReason: "cancelled" };
-				if (selection.carriedContext) await session.sendCustomMessage({
-					customType: "codey-acp-t3-context", content: selection.carriedContext, display: false,
-				});
 				const lines = [...skills.map(({ name, description }) => `$${name} — ${description}`),
 					...skipped.map(([name, reason]) => `Skipped $${name} — ${reason}`)];
-				update(id, { sessionUpdate: "agent_message_chunk", content: textContent(lines.length ?
+				return await localReply(lines.length ?
 					`Project skills in this workspace\n\n~~~text\n${lines.join("\n")}\n~~~${partial ? "\n\nThe catalog reached its display limit." : ""}` :
-					"No project skills found in .agents/skills.") });
-				return { stopReason: "end_turn" };
+					"No project skills found in .agents/skills.");
 			}
 			if (selection) {
 				const { name, args, leading } = selection;
-				const { skill, reason } = userSkills.some((entry) => entry.name === name) ? loadSkill(home, "user", name)
-					: await runProjectSkill("acp-skill", { name }, current.skills.signal);
+				const personal = userSkills.find((entry) => entry.name === name);
+				let resolved = personal ? loadSkill(home, "user", name) : undefined;
+				if (!personal || (personal.pending && !resolved?.skill)) {
+					const project = await runProjectSkill("acp-skill", { name }, current.skills.signal);
+					if (!resolved || project.skill) resolved = project;
+				}
+				const { skill, reason, pending } = resolved;
+				if (pending) {
+					return await localReply(`${reason}\n\nRun \`codey acp skills inspect ${name}\` in your terminal. Verify the path and SHA-256, then run \`codey acp skills trust ${name} '<path>' '<sha256>'\`. If an old approval exists, remove it with \`codey acp skills untrust ${name}\` before approving again. Refresh T3, reconnect the ACP session, then select the skill again.`);
+				}
 				if (skill) {
 					const placeholders = skill.body.split(skillArguments).length - 1;
 					if (Buffer.byteLength(skill.body) + placeholders * (Buffer.byteLength(args) - skillArguments.length) > 64 * 1024) {

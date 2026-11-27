@@ -15,7 +15,9 @@ from threading import Thread
 fixtures = runpy.run_path(str(Path(__file__).with_name("rpc.integration.py")))
 Model, Rpc = fixtures["Model"], fixtures["Rpc"]
 args = ["acp", "--sandbox=workspace-write"]
-alias = "litellm/openai/fixture-one"
+alias = "litellm/openai/gpt-6.2-sol"
+sub_provider_key = "com.github.yaoshining.codey/subProvider"
+pending_skill = {"name": "$ego-browser", "description": "External personal skill · approval required before use"}
 
 
 def write_skill(root, name, description, body):
@@ -88,10 +90,10 @@ def run(binary, t3_fixture=None):
         profiles = agent / "custom-providers"
         profiles.mkdir(mode=0o700)
         profile = profiles / "litellm.json"
-        profile.write_text(json.dumps({"displayName": "LiteLLM", "api": "openai-responses",
+        profile.write_text(json.dumps({"displayName": "LiteLLM-Test", "api": "openai-responses",
                                       "auth": "key", "key": "fake-litellm-key", "baseUrl": endpoint + "/v1",
-                                      "models": ["openai/fixture-one"],
-                                      "reasoningLevels": {"openai/fixture-one": alias_levels[1:]}}))
+                                      "models": ["openai/gpt-6.2-sol"],
+                                      "reasoningLevels": {"openai/gpt-6.2-sol": alias_levels[1:]}}))
         profile.chmod(0o600)
         write_skill(agent / "skills", "personal-notes", "Personal fixture", "PERSONAL_SKILL_BODY $ARGUMENTS")
         standard = home / ".agents/skills"
@@ -105,8 +107,10 @@ def run(binary, t3_fixture=None):
         ego.mkdir(parents=True)
         (ego / "ego-skills").symlink_to(external.parent, target_is_directory=True)
         (standard / "ego-browser").symlink_to(ego / "ego-skills", target_is_directory=True)
-        duplicate = agent / "skills/standard-notes"
-        duplicate.symlink_to(standard / "standard-notes", target_is_directory=True)
+        duplicate = write_skill(resources, "standard-notes", "Unapproved duplicate", "DUPLICATE_MARKER")
+        (agent / "skills/standard-notes").symlink_to(duplicate.parent, target_is_directory=True)
+        oversized = write_skill(resources, "oversized-notes", "Oversized fixture", "x" * (48 * 1024))
+        (standard / "oversized-notes").symlink_to(oversized.parent, target_is_directory=True)
         internal = write_skill(standard / "shared", "shared-notes", "Internal linked fixture", "INTERNAL_LINK_SKILL_BODY")
         (standard / "shared-notes").symlink_to(internal.parent, target_is_directory=True)
         (standard / "broken-notes").symlink_to(standard / "missing")
@@ -146,18 +150,44 @@ def run(binary, t3_fixture=None):
                                     text=True, env=env, cwd=workspace, timeout=20)
             assert (result.returncode == 0) == succeeds, result
             return result.stdout if succeeds else result.stderr
-        expected_pin = {"root": str(standard), "path": str(external), "sha256": hashlib.sha256(external.read_bytes()).hexdigest()}
-        assert json.loads(trust_command("inspect", "ego-browser")) == expected_pin
-        assert "changed" in trust_command("trust", "ego-browser", external, "0" * 64, succeeds=False)
+        # The catalog should work even when this otherwise eligible file cannot be opened.
+        external.chmod(0)
         with Acp(binary, args, "/", env) as unapproved:
             unapproved.request("initialize", protocolVersion=2, clientInfo={"name": "t3-code-provider-test"})
             unapproved.request("session/new", cwd="/", mcpServers=[])
             notice = unapproved.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
-            assert all(command["name"] != "$ego-browser" for command in notice["params"]["update"]["availableCommands"])
-            assert str(external) not in str(unapproved.seen)
+            commands = notice["params"]["update"]["availableCommands"]
+            assert pending_skill in commands
+            assert [item for item in commands if item["name"] == "$standard-notes"] == [
+                {"name": "$standard-notes", "description": "Standard personal fixture"},
+            ]
+            assert all(item["name"] not in ("$oversized-notes", "$remote-notes", "$project-notes") for item in commands)
+            assert all(value not in str(unapproved.seen) for value in (str(external), "External fixture", "EXTERNAL_SKILL_BODY"))
+        if t3_fixture:
+            version = subprocess.check_output([binary, "--version"], text=True, cwd=workspace, env=env).strip()
+            subprocess.run(["node", t3_fixture, binary, str(workspace), "pending-probe", version], check=True, env=env, timeout=140)
+        assert not Model.requests and not Gateway.responses and not (agent / "acp-skill-trust").exists()
+        external.chmod(0o664)
+        expected_pin = {"root": str(standard), "path": str(external), "sha256": hashlib.sha256(external.read_bytes()).hexdigest()}
+        assert json.loads(trust_command("inspect", "ego-browser")) == expected_pin
+        assert "changed" in trust_command("trust", "ego-browser", external, "0" * 64, succeeds=False)
         trust_command("trust", "ego-browser", external, expected_pin["sha256"])
         assert not (agent / "skills/ego-browser").exists() and (standard / "ego-browser").is_symlink()
         subprocess.run(["/usr/bin/curl", "--silent", "--noproxy", "*", endpoint + "/probe"], check=True, env=env)
+        def model_metadata(result):
+            config = next(option for option in result["configOptions"] if option["id"] == "model")
+            options = {item["value"]: item for item in config["options"]}
+            tag = {"id": "litellm", "displayName": "LiteLLM-Test"}
+            assert options[alias] == {"value": alias, "name": "openai/gpt-6.2-sol", "_meta": {sub_provider_key: tag}}
+            assert sub_provider_key not in options["fixture/fixture-one"].get("_meta", {})
+            if "models" in result:
+                entries = result["models"]["availableModels"]
+                assert [item["modelId"] for item in entries] == list(options)
+                compat = next(item for item in entries if item["modelId"] == alias)
+                assert compat["name"] == "openai/gpt-6.2-sol" and compat["_meta"][sub_provider_key] == tag
+                assert [item["value"] for item in compat["_meta"]["reasoningEfforts"]] == alias_levels
+            assert all(secret not in str(result) for secret in (endpoint, "fake-litellm-key", "acp-fixture-key", "baseUrl", "Authorization"))
+            return list(options)
         for directory in ("/", str(home), str(workspace)):
             with Acp(binary, args, directory, env) as probe:
                 caps = probe.request("initialize", protocolVersion=2,
@@ -166,13 +196,14 @@ def run(binary, t3_fixture=None):
                 assert not caps.get("loadSession") and caps["sessionCapabilities"]["delete"] == {}
                 setup = {"cwd": directory, "mcpServers": []}
                 result = probe.request("session/new", **setup)
+                expected_model_order = model_metadata(result)
                 sid = result["sessionId"]
                 assert {option["value"] for option in result["configOptions"][0]["options"]} == {
                     "fixture/fixture-one", "fixture/fixture-think", alias
                 }
                 assert result["models"]["currentModelId"] == "fixture/fixture-one"
                 catalog = {entry["modelId"]: entry for entry in result["models"]["availableModels"]}
-                assert catalog[alias]["name"] == "openai/fixture-one"
+                assert catalog[alias]["name"] == "openai/gpt-6.2-sol"
                 assert [item["value"] for item in catalog[alias]["_meta"]["reasoningEfforts"]] == alias_levels
                 assert catalog["fixture/fixture-one"]["_meta"]["reasoningEfforts"] == [{"value": "off", "label": "off"}]
                 probe.request("session/set_config_option", sessionId=sid, configId="model", value="fixture/fixture-think")
@@ -219,6 +250,7 @@ def run(binary, t3_fixture=None):
             ]})
             session_id = result["sessionId"]
             assert "/" not in session_id
+            assert model_metadata(result) == expected_model_order
             files = list((agent / "sandbox-acp").glob("*/*.jsonl"))
             assert len(files) == 1 and files[0].name == session_id and files[0].stat().st_mode & 0o777 == 0o600
             assert len(result["configOptions"][0]["options"]) == 3
@@ -271,14 +303,16 @@ def run(binary, t3_fixture=None):
             before_changes = len(Model.requests)
             saved = external.read_bytes()
             external.write_bytes(saved + b"\nchanged content")
-            assert "changed" in skill_prompt("$ego-browser", succeeds=False)["message"]
+            assert skill_prompt("$ego-browser")["stopReason"] == "end_turn"
+            assert "changed" in str(acp.seen[-2]) and str(external) not in str(acp.seen[-2])
             external.write_bytes(saved)
             alternate = root / "alternate skill"
             alternate.mkdir()
             (alternate / "SKILL.md").write_bytes(saved)
             (ego / "ego-skills").unlink()
             (ego / "ego-skills").symlink_to(alternate, target_is_directory=True)
-            assert "different file" in skill_prompt("$ego-browser", succeeds=False)["message"]
+            assert skill_prompt("Please use $ego-browser for this request")["stopReason"] == "end_turn"
+            assert "different file" in str(acp.seen[-2]) and str(alternate) not in str(acp.seen[-2])
             assert "target changed" in trust_command("trust", "ego-browser", external, expected_pin["sha256"], succeeds=False)
             (ego / "ego-skills").unlink()
             (ego / "ego-skills").symlink_to(external.parent, target_is_directory=True)
@@ -286,12 +320,13 @@ def run(binary, t3_fixture=None):
             assert acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": "slow fixture"}])["stopReason"] == "cancelled"
             Model.release.set()
             changed = acp.request("session/set_config_option", sessionId=session_id, configId="model", value=alias)
+            assert model_metadata(changed) == expected_model_order
             assert [option["value"] for option in changed["configOptions"][1]["options"]] == alias_levels
             acp.request("session/set_config_option", sessionId=session_id, configId="thinking", value="high")
             assert acp.request("session/prompt", sessionId=session_id,
                                prompt=[{"type": "text", "text": "alias wire fixture"}])["stopReason"] == "end_turn"
             body, auth = Gateway.responses[-1]
-            assert body["model"] == "openai/fixture-one" and body["reasoning"]["effort"] == "high"
+            assert body["model"] == "openai/gpt-6.2-sol" and body["reasoning"]["effort"] == "high"
             assert auth == "Bearer fake-litellm-key"
             acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             with Acp(binary, args, workspace, env) as competing:
@@ -301,6 +336,7 @@ def run(binary, t3_fixture=None):
             resumed.initialize()
             assert resumed.request("session/load", sessionId=str(files[0]), **setup, succeeds=False)["code"] == -32602
             state = resumed.request("session/load", sessionId=session_id, **setup)
+            assert model_metadata(state) == expected_model_order
             assert state["configOptions"][0]["currentValue"] == "fixture/fixture-think"
             assert any("boundary fixture" in str(frame.get("params", {})) for frame in resumed.seen)
             assert resumed.request("session/prompt", sessionId=session_id,
@@ -348,10 +384,22 @@ def run(binary, t3_fixture=None):
             revoked.initialize()
             sid = revoked.request("session/new", **setup)["sessionId"]
             notice = revoked.until(lambda frame: frame.get("params", {}).get("update", {}).get("sessionUpdate") == "available_commands_update")
-            assert all(command["name"] != "$ego-browser" for command in notice["params"]["update"]["availableCommands"])
+            assert pending_skill in notice["params"]["update"]["availableCommands"]
             before = len(Model.requests)
-            denied = revoked.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "$ego-browser"}], succeeds=False)
-            assert "needs approval" in denied["message"] and str(external) not in str(denied) and len(Model.requests) == before
+            assert revoked.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "$ego-browser"}])["stopReason"] == "end_turn"
+            reply = str(revoked.seen[-2])
+            assert "codey acp skills inspect ego-browser" in reply and str(external) not in reply and len(Model.requests) == before
+        if t3_fixture:
+            before = len(Model.requests)
+            subprocess.run(["node", t3_fixture, binary, str(workspace), "pending-chat"], check=True, env=env, timeout=140)
+            assert len(Model.requests) == before
+        write_skill(other / ".agents/skills", "ego-browser", "Ordinary same-name project skill", "SAME_NAME_PROJECT_BODY")
+        with Acp(binary, args, other, env) as same_name:
+            same_name.initialize()
+            sid = same_name.request("session/new", cwd=str(other), mcpServers=[])["sessionId"]
+            assert same_name.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": "$ego-browser"}])["stopReason"] == "end_turn"
+            assert "SAME_NAME_PROJECT_BODY" in str(Model.requests[-1]["messages"])
+            assert "EXTERNAL_SKILL_BODY" not in str(Model.requests[-1]["messages"])
         server.shutdown()
 
 
