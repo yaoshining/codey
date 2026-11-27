@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../../packages/coding-agent/src/config.ts";
-import { authentication, discoverModels, protocols, providerFromProfile, supportedEffortValues, validModelId } from "./provider-protocols.mjs";
+import { authentication, discoverModelLimits, discoverModels, modelInfoUrl, protocols, providerFromProfile, supportedEffortValues, validModelId } from "./provider-protocols.mjs";
 import { providerIdentity, providerKey, providerStore } from "./provider-store.mjs";
 import { providerEndpoint } from "./provider-endpoint.mjs";
+import { limitFields, modelLimitSettings, validModelLimit, validateModelLimits } from "./provider-limits.mjs";
 
 function hostStore(cwd) {
 	const home = realpathSync(homedir());
@@ -99,16 +100,30 @@ async function chooseModels(ui, initial, profile) {
 	let catalog = [];
 	let discovery;
 	let catalogStatus = "";
+	const edits = new Map();
+	const limitsFor = (model) => {
+		if (edits.has(model)) return edits.get(model);
+		const saved = Object.hasOwn(profile.modelLimits ?? {}, model) ? profile.modelLimits[model] : {};
+		const reported = discovery?.limits?.get(model);
+		return reported ? { ...saved, detected: { ...saved.detected, ...reported } } : saved;
+	};
 	for (;;) {
 		const action = await ui.select(`Models for ${providerLabel(profile)} (${selected.length} selected)${catalogStatus ? `\n${catalogStatus}` : ""}`, [
 			"Discover via the model catalog", ...(discovery?.continuation ? ["Continue loading model catalog"] : []),
 			...(catalog.length ? ["Search and select discovered models"] : []),
-			"Enter model IDs manually", "Keep selections and continue",
+			"Enter model IDs manually", "Keep selections and continue", ...(selected.length ? ["Configure model limits"] : []),
 		]);
 		if (action === undefined) return undefined;
 		if (action === "Keep selections and continue") {
-			if (selected.length) return selected;
+			if (selected.length) return { models: selected, modelLimits: validateModelLimits({ ...profile, models: selected },
+				Object.fromEntries(selected.map((model) => [model, limitsFor(model)]))) };
 			ui.notify("Select or enter at least one model ID.", "warning");
+		} else if (action === "Configure model limits") {
+			const model = await ui.select("Choose a model for token limits", selected);
+			if (model !== undefined) {
+				const result = await editLimits(ui, profile, model, limitsFor(model));
+				if (result) edits.set(model, result);
+			}
 		} else if (action === "Enter model IDs manually") {
 			const input = await providerInput(ui, "Model IDs (one ID or a JSON array)", { initial: selected.length ? JSON.stringify(selected) : "" });
 			if (input === undefined) continue;
@@ -125,6 +140,10 @@ async function chooseModels(ui, initial, profile) {
 				const resume = action === "Continue loading model catalog";
 				if (!resume && !profile.lanHttpApprovedUrl && !await ui.confirm("Request the model catalog?", `${profile.baseUrl}${protocols.get(profile.api).catalog}\nAuthentication: ${authentication.get(profile.auth).label}. No inference request will be sent.`)) continue;
 				discovery = await discoverModels(profile, resume ? discovery.continuation : undefined);
+				for (const [model, limits] of edits) {
+					const reported = discovery.limits?.get(model);
+					if (reported) edits.set(model, { ...limits, detected: { ...limits.detected, ...reported } });
+				}
 				catalog = discovery.ids;
 				catalogStatus = discovery.partial ? `Only ${catalog.length} model IDs loaded.` : "";
 				if (discovery.reason) {
@@ -135,6 +154,46 @@ async function chooseModels(ui, initial, profile) {
 			}
 			if (catalog.length) selected = await picker(ui, catalog, selected, catalogStatus) ?? selected;
 		}
+	}
+}
+
+const limitActions = new Map(Object.entries(limitFields).map(([field, label]) => [`Edit ${label.toLowerCase()}`, field]));
+
+function limitSummary(profile, model, settings) {
+	return Object.entries(modelLimitSettings(profile, model, settings)).map(([field, { value, source, capped }]) =>
+		`${limitFields[field]}: ${value} tokens (${source}${capped ? ", capped by context" : ""})`).join("\n");
+}
+
+async function editLimits(ui, profile, model, initial) {
+	let limits = initial ?? {};
+	for (;;) {
+		const action = await ui.select(`Token limits for ${model}\n${limitSummary(profile, model, limits)}`, [
+			"Read gateway limits", ...limitActions.keys(), "Keep model limits",
+		]);
+		if (action === undefined) return;
+		if (action === "Keep model limits") return limits;
+		if (action === "Read gateway limits") {
+			if (!await ui.confirm("Read limits from the configured gateway?",
+				`${profile.baseUrl}${protocols.get(profile.api).catalog}\nIf needed: ${modelInfoUrl(profile).href}\nNo inference request will be sent.`)) continue;
+			const result = await discoverModelLimits(profile, model);
+			limits = { ...limits, detected: result.limits };
+			if (result.reason) ui.notify(`${result.reason} Missing limits remain unknown.`, "warning");
+			continue;
+		}
+		const field = limitActions.get(action);
+		const input = await providerInput(ui, `${limitFields[field]} in tokens (blank uses automatic limits)`, {
+			initial: limits.manual?.[field]?.toString() ?? "",
+		});
+		if (input === undefined) continue;
+		const manual = { ...limits.manual };
+		const value = input.trim();
+		if (!value) delete manual[field];
+		else if (/^\d+$/.test(value) && validModelLimit(Number(value), profile.api)) manual[field] = Number(value);
+		else {
+			ui.notify("Enter a whole number up to 10000000. OpenAI Responses requires at least 16 tokens.", "warning");
+			continue;
+		}
+		limits = { ...limits, manual };
 	}
 }
 
@@ -172,8 +231,17 @@ async function draft(ui, identity, previous, action) {
 			profile.key = providerKey(input);
 		}
 	}
-	profile.models = await chooseModels(ui, previous?.models ?? [], profile);
-	if (!profile.models) return;
+	if (previous?.modelLimits) {
+		const sameRoute = previous.baseUrl === baseUrl && previous.api === api;
+		profile.modelLimits = Object.fromEntries(Object.entries(previous.modelLimits).map(([model, limits]) => [model, sameRoute ? limits : {
+			manual: limits.manual,
+		}]));
+	}
+	const chosen = await chooseModels(ui, previous?.models ?? [], profile);
+	if (!chosen) return;
+	profile.models = chosen.models;
+	if (Object.keys(chosen.modelLimits).length) profile.modelLimits = chosen.modelLimits;
+	else delete profile.modelLimits;
 	if (previous?.reasoningLevels && previous.baseUrl === baseUrl && previous.api === api) {
 		const entries = Object.entries(previous.reasoningLevels).filter(([model]) => profile.models.includes(model));
 		if (entries.length) profile.reasoningLevels = Object.fromEntries(entries);
@@ -189,6 +257,12 @@ export default function customProviders(pi) {
 		const provider = providerFromProfile(profile);
 		pi.registerProvider(provider);
 		registered.set(profile.id, provider);
+		return provider;
+	}
+	async function applyActiveLimits(ctx, id, provider) {
+		if (ctx.model?.provider !== id) return true;
+		const next = provider.getModels().find((model) => model.id === ctx.model.id);
+		return !next || (next.contextWindow === ctx.model.contextWindow && next.maxTokens === ctx.model.maxTokens) || await pi.setModel(next);
 	}
 	const errors = [];
 	try {
@@ -214,7 +288,7 @@ export default function customProviders(pi) {
 				const store = hostStore(ctx.cwd);
 				if (!store) throw new Error("The wizard needs the default ~/.codey/agent outside the workspace.");
 				const existing = store.list().entries.filter(({ profile }) => !builtins.has(profile.id));
-				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key", "Rename display name", "Delete provider", "Configure model reasoning"] : [])];
+				const actions = ["Add provider", ...(existing.length ? ["Edit provider or models", "Replace API key", "Rename display name", "Delete provider", "Configure model reasoning", "Configure model limits"] : [])];
 				const action = await ui.select("Custom providers", actions);
 				if (action === undefined) return;
 				const adding = action === "Add provider";
@@ -234,7 +308,7 @@ export default function customProviders(pi) {
 					}
 				};
 				checkConflict();
-				if (action === "Rename display name" || action === "Delete provider" || action === "Configure model reasoning") {
+				if (["Rename display name", "Delete provider", "Configure model reasoning", "Configure model limits"].includes(action)) {
 					await manageProvider(action, entry, store, ctx);
 					return;
 				}
@@ -248,10 +322,11 @@ export default function customProviders(pi) {
 				if (await ui.select(`Save custom provider?\n${summary}`, ["Cancel", "Save provider"], { blockedKind: "permission" }) !== "Save provider") return;
 				checkConflict();
 				store.save(profile, entry?.revision);
-				register(profile);
+				const provider = register(profile);
 				void ctx.modelRegistry.refresh({ allowNetwork: false, providers: [id], signal: AbortSignal.timeout(4_000) }).catch(() => {});
 				const saved = action === "Replace API key" ? "API key replaced for" : "Custom provider saved:";
-				ui.notify(`${saved} ${providerLabel(profile)}. Open /model to select it, or /reload if it is not listed yet.`, "info");
+				const active = await applyActiveLimits(ctx, id, provider);
+				ui.notify(`${saved} ${providerLabel(profile)}. ${active ? "Open /model to select it, or /reload if it is not listed yet." : "Reselect the current model with /model to apply its limits."}`, "info");
 			} catch (error) {
 				ui.notify(`Custom provider: ${error.message}`, "error");
 			}
@@ -269,6 +344,26 @@ export default function customProviders(pi) {
 		}
 
 		checkRuntime();
+		if (action === "Configure model limits") {
+			const model = await ui.select("Choose a model for token limits", profile.models);
+			if (model === undefined) return;
+			const original = Object.hasOwn(profile.modelLimits ?? {}, model) ? profile.modelLimits[model] : undefined;
+			const limits = await editLimits(ui, profile, model, original);
+			if (!limits) return;
+			const modelLimits = validateModelLimits(profile, { ...profile.modelLimits, [model]: limits });
+			const draft = { ...profile };
+			if (Object.keys(modelLimits).length) draft.modelLimits = modelLimits;
+			else delete draft.modelLimits;
+			const save = "Save model limits";
+			if (await ui.select(`Save token limits for ${model}?\n${limitSummary(draft, model)}`, ["Cancel", save], { blockedKind: "permission" }) !== save) return;
+			checkRuntime();
+			store.save(draft, revision);
+			const provider = register(draft);
+			if (!await applyActiveLimits(ctx, id, provider)) {
+				ui.notify("Model limits saved. Reselect the current model with /model to apply them.", "info");
+			} else ui.notify(`Model limits saved for ${id}/${model}.`, "info");
+			return;
+		}
 		if (action === "Configure model reasoning") {
 			const allowed = supportedEffortValues(profile.api);
 			if (!allowed.length) throw new Error("Anthropic Messages uses a different reasoning configuration and is unavailable here.");

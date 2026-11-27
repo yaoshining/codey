@@ -2,8 +2,10 @@
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import { THINKING_LEVEL_OPTIONS } from "../../packages/coding-agent/src/core/defaults.ts";
 import { authorizedProviderEndpoint, fetchProvider } from "./provider-endpoint.mjs";
+import { commonModelLimits, mergeReportedLimits, modelLimitSettings, readCatalogLimits } from "./provider-limits.mjs";
 
 export const protocols = new Map([
 	["openai-completions", { label: "OpenAI Chat Completions", inference: "/chat/completions", catalog: "/models", create: openAICompletionsApi }],
@@ -90,6 +92,7 @@ export function providerFromProfile(profile) {
 	const displayName = profile.displayName ?? profile.id;
 	// Pi's model selector can display a model label alongside the canonical provider ID.
 	const models = profile.models.map((id) => {
+		const { contextWindow, maxTokens } = modelLimitSettings(profile, id);
 		const levels = Object.hasOwn(profile.reasoningLevels ?? {}, id) ? profile.reasoningLevels[id] : undefined;
 		const thinkingLevelMap = levels && Object.fromEntries(
 			THINKING_LEVEL_OPTIONS.filter((level) => level !== "off").map((level) => [level, levels.includes(level) ? level : null]),
@@ -99,7 +102,7 @@ export function providerFromProfile(profile) {
 			// Pi RPC serializes these descriptors directly. Supply the URL only to the private adapter.
 			baseUrl: "", reasoning: Boolean(levels), ...(levels ? { thinkingLevelMap } : {}),
 			input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 32000, maxTokens: 4096,
+			contextWindow: contextWindow.value, maxTokens: maxTokens.value,
 		};
 	});
 	function requestModel(model) {
@@ -122,8 +125,18 @@ export function providerFromProfile(profile) {
 		id: profile.id, name: displayName.toLowerCase() === profile.id ? displayName : profile.id, baseUrl: profile.baseUrl,
 		auth: { apiKey: { name: source, check: async () => ({ type: "api_key", source }), resolve: async () => ({ auth: {}, source }) } },
 		getModels: () => models,
-		stream: (model, context, options) => streams.stream(requestModel(model), context, requestOptions(options)),
-		streamSimple: (model, context, options) => streams.streamSimple(requestModel(model), context, requestOptions(options)),
+		stream(model, context, options) {
+			const budget = Object.hasOwn(profile.modelLimits ?? {}, model.id) ? {
+				maxTokens: clampMaxTokensToContext(model, context, Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens)),
+			} : undefined;
+			return streams.stream(requestModel(model), context, requestOptions({ ...options, ...budget }));
+		},
+		streamSimple(model, context, options) {
+			const budget = Object.hasOwn(profile.modelLimits ?? {}, model.id) && options?.maxTokens !== undefined ? {
+				maxTokens: Math.min(options.maxTokens, model.maxTokens),
+			} : undefined;
+			return streams.streamSimple(requestModel(model), context, requestOptions({ ...options, ...budget }));
+		},
 	};
 }
 
@@ -161,7 +174,7 @@ export function validModelId(value) {
 export async function discoverModels(profile, previous) {
 	const policy = authorizedProviderEndpoint(profile);
 	const endpoint = new URL(policy.baseUrl + protocols.get(profile.api).catalog);
-	const { ids, seen } = previous ?? { ids: new Set(), seen: new Set() };
+	const { ids, seen, limits } = previous ?? { ids: new Set(), seen: new Set(), limits: new Map() };
 	const signal = AbortSignal.timeout(25_000);
 	let page = previous?.page ?? endpoint;
 	let remaining = maxCatalogBatchPages;
@@ -169,7 +182,7 @@ export async function discoverModels(profile, previous) {
 	let retryable = false;
 	const partial = (reason, resume) => ({
 		ids: [...ids], reason, partial: true,
-		continuation: resume ? { ids, seen, page } : undefined,
+		continuation: resume ? { ids, seen, page, limits } : undefined,
 	});
 	try {
 		while (page) {
@@ -200,8 +213,12 @@ export async function discoverModels(profile, previous) {
 			if (!Array.isArray(data?.data)) throw new Error("The endpoint did not return a supported model catalog.");
 			for (const entry of data.data) {
 				const id = entry?.id;
-				if (!validModelId(id) || (profile.key && id.includes(profile.key)) || ids.has(id)) continue;
-				if (ids.size === maxCatalogIds) return partial("The catalog exceeded the 50,000-ID safety limit.", false);
+				if (!validModelId(id) || (profile.key && id.includes(profile.key))) continue;
+				if (ids.size === maxCatalogIds && !ids.has(id)) return partial("The catalog exceeded the 50,000-ID safety limit.", false);
+				const reported = readCatalogLimits(entry, profile.api);
+				const usable = ids.has(id) ? commonModelLimits(limits.get(id) ?? {}, reported) : reported;
+				if (Object.keys(usable).length) limits.set(id, usable);
+				else limits.delete(id);
 				ids.add(id);
 			}
 			seen.add(page.href);
@@ -215,9 +232,41 @@ export async function discoverModels(profile, previous) {
 				page.searchParams.set(profile.api === "anthropic-messages" ? "after_id" : "after", cursor);
 			} else page = undefined;
 		}
-		return { ids: [...ids], reason: ids.size ? undefined : "The catalog returned no model IDs." };
+		return { ids: [...ids], limits, reason: ids.size ? undefined : "The catalog returned no model IDs." };
 	} catch (error) {
 		return partial(signal.aborted ? "Model discovery timed out." : error.name === "Error" ? error.message : "The model catalog response could not be read.",
 			signal.aborted || retryable || error.code === "CODEY_CATALOG_INTERRUPTED");
+	}
+}
+
+export function modelInfoUrl(profile) {
+	const { baseUrl } = authorizedProviderEndpoint(profile);
+	return new URL(baseUrl + (profile.api === "anthropic-messages" ? "/v1/model/info" : "/model/info"));
+}
+
+export async function discoverModelLimits(profile, model) {
+	const catalog = await discoverModels(profile);
+	const fromCatalog = catalog.limits?.get(model);
+	if (fromCatalog?.contextWindow && fromCatalog.maxTokens) return { limits: fromCatalog };
+	const policy = authorizedProviderEndpoint(profile);
+	try {
+		const response = await fetchProvider(modelInfoUrl(profile), {
+			headers: headersFor(profile), redirect: "manual", signal: AbortSignal.timeout(10_000),
+		}, policy);
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
+			return { limits: fromCatalog ?? {}, reason: response.status >= 300 && response.status < 400 ?
+				"Gateway model info redirected. No redirect was followed." : `Gateway model info returned HTTP ${response.status}.` };
+		}
+		const { data } = await boundedJson(response);
+		let info;
+		for (const entry of Array.isArray(data?.data) ? data.data : []) {
+			if (entry?.model_name !== model) continue;
+			const next = readCatalogLimits(entry, profile.api, true);
+			info = info ? commonModelLimits(info, next) : next;
+		}
+		return { limits: mergeReportedLimits(fromCatalog, info), reason: catalog.partial ? catalog.reason : undefined };
+	} catch {
+		return { limits: fromCatalog ?? {}, reason: "Gateway model info was unavailable or invalid." };
 	}
 }
