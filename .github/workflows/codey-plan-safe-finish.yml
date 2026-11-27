@@ -1,0 +1,33 @@
+name: Verify Codey Plan safe finish on macOS
+on:
+  push:
+    branches: [verify/codey-plan-safe-finish]
+    paths: [.github/workflows/codey-plan-safe-finish.yml]
+permissions:
+  contents: read
+jobs:
+  plan:
+    runs-on: macos-26-intel
+    timeout-minutes: 15
+    env:
+      CANDIDATE: a60b88b64bf9caf645977c04bf10cff1eecd5bad
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: a60b88b64bf9caf645977c04bf10cff1eecd5bad
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 26.13.1
+      - name: Install the exact Codey candidate in a synthetic HOME
+        run: |
+          sw_vers
+          uname -m
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          mkdir -p "$RUNNER_TEMP/install-home"
+          env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh "$CANDIDATE"
+      - name: Exercise the installed TUI, print and RPC with a loopback model
+        run: |
+          python3 -m venv "$RUNNER_TEMP/test-python"
+          "$RUNNER_TEMP/test-python/bin/pip" install 'pexpect==4.9.0'
+          "$RUNNER_TEMP/test-python/bin/python" codey/test/plan.integration.py "$RUNNER_TEMP/codey-bin/codey"
