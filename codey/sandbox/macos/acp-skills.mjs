@@ -12,6 +12,7 @@ const maxDiagnostics = 16;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const namePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const projectSkillsCommand = "project-skills";
+const pendingDescription = "External personal skill · approval required before use";
 const validName = (name) => typeof name === "string" && name.length <= 64 && namePattern.test(name) && name !== projectSkillsCommand;
 
 function owned(stat, uid) {
@@ -63,16 +64,19 @@ function resolveEntry(base, roots, { root, uid }, name) {
 	return { path: join(checkedDirectory(directory, uid), "SKILL.md"), linked: true };
 }
 
+function fileAllowed(stat, uid, external) {
+	return stat.isFile() && stat.nlink === 1 && stat.size > 0 && stat.size <= maxSkill &&
+		(external ? stat.uid === uid && (stat.mode & 0o002) === 0 : owned(stat, uid));
+}
+
 function readSkill(path, uid, name, full, external = false, expectedHash) {
 	try {
-		const fileAllowed = (stat) => stat.isFile() && stat.nlink === 1 && stat.size <= maxSkill &&
-			(external ? stat.uid === uid && (stat.mode & 0o002) === 0 : owned(stat, uid));
 		const before = lstatSync(path);
-		if (!fileAllowed(before) || realpathSync(path) !== path) return;
+		if (!fileAllowed(before, uid, external) || realpathSync(path) !== path) return;
 		const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 		try {
 			const stat = fstatSync(fd);
-			if (!fileAllowed(stat) || stat.dev !== before.dev || stat.ino !== before.ino || realpathSync(path) !== path) return;
+			if (!fileAllowed(stat, uid, external) || stat.dev !== before.dev || stat.ino !== before.ino || realpathSync(path) !== path) return;
 			const readBody = full || external;
 			const buffer = Buffer.alloc(Math.min(stat.size, readBody ? maxSkill : maxHeader) + 1);
 			let size = 0, headerLength = 0;
@@ -89,7 +93,7 @@ function readSkill(path, uid, name, full, external = false, expectedHash) {
 			}
 			if (!headerLength || (readBody && (size !== stat.size || size > maxSkill))) return;
 			const after = lstatSync(path);
-			if (!fileAllowed(after) || after.dev !== stat.dev || after.ino !== stat.ino || realpathSync(path) !== path) return;
+			if (!fileAllowed(after, uid, external) || after.dev !== stat.dev || after.ino !== stat.ino || realpathSync(path) !== path) return;
 			const sha256 = external ? createHash("sha256").update(buffer.subarray(0, size)).digest("hex") : undefined;
 			if (expectedHash && sha256 !== expectedHash) return;
 			const { frontmatter } = parseFrontmatter(decoder.decode(buffer.subarray(0, headerLength)));
@@ -138,21 +142,26 @@ function skillAt(base, roots, location, name, full) {
 		const { path, external, linked, reason } = resolveEntry(base, roots, location, name);
 		if (!path) return { reason };
 		const trust = location.uid !== undefined && linked ? trustRecord(base, name) : undefined;
+		// Checking an unapproved external link only uses filesystem metadata, never SKILL.md bytes.
+		if (external && (!fileAllowed(lstatSync(path), location.uid, true) || realpathSync(path) !== path)) {
+			return { reason: "External SKILL.md must be a user-owned regular file within the size and permission limits." };
+		}
 		if (trust?.root === location.root && trust.path !== path) {
-			return { reason: "Approved external skill link now points to a different file. Inspect it before approving again." };
+			return { pending: Boolean(external), reason: "Approved external skill link now points to a different file." };
 		}
 		if (!external) return { skill: readSkill(path, location.uid, name, full) };
 		if (trust?.root !== location.root || trust?.path !== path || !/^[a-f0-9]{64}$/.test(trust?.sha256 ?? "")) {
-			return { reason: "External personal skill link needs approval. Run codey acp skills inspect for this name." };
+			return { pending: true, reason: "External personal skill link needs approval." };
 		}
 		const skill = readSkill(path, location.uid, name, full, true, trust.sha256);
-		return skill ? { skill } : { reason: "Approved external skill changed or became unreadable. Inspect it before approving again." };
+		return skill ? { skill } : { pending: true, reason: "Approved external skill changed or became unreadable." };
 	} catch { return { reason: "Skill directory does not meet its scope or ownership requirements." }; }
 }
 
 // The host calls this only with its canonical Home. The worker uses its sandbox cwd.
 export function discoverSkills(base, scope) {
 	const skills = new Map();
+	const pending = new Set();
 	const skipped = new Map();
 	let partial = false;
 	const roots = skillRoots(base, scope);
@@ -163,33 +172,40 @@ export function discoverSkills(base, scope) {
 			try {
 				while (count++ < maxEntries && (entry = directory.readSync())) {
 					if ((!entry.isDirectory() && !entry.isSymbolicLink()) || !validName(entry.name) || skills.has(entry.name)) continue;
-					const { skill, reason } = skillAt(base, roots, location, entry.name, false);
+					const { skill, pending: needsApproval, reason } = skillAt(base, roots, location, entry.name, false);
 					if (skill) skills.set(skill.name, skill);
+					else if (needsApproval) pending.add(entry.name);
 					else if (reason && skipped.size < maxDiagnostics) skipped.set(entry.name, reason);
 				}
 			} finally { directory.closeSync(); }
 			partial ||= count > maxEntries;
 		} catch { /* A missing root must not hide skills in the other root. */ }
 	}
-	const sorted = [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
-	return { skills: sorted.slice(0, maxCatalog).map(({ name, description }) => ({ name, description })),
-		skipped: [...skipped].filter(([name]) => !skills.has(name)), partial: partial || sorted.length > maxCatalog };
+	// Usable entries keep their priority and cannot be displaced by an unapproved link with the same name.
+	const usable = [...skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+	const waiting = [...pending].filter((name) => !skills.has(name)).sort();
+	const entries = [...usable.map(({ name, description }) => ({ name, description })),
+		...waiting.map((name) => ({ name, description: pendingDescription, pending: true }))];
+	return { skills: entries.slice(0, maxCatalog), skipped: [...skipped].filter(([name]) => !skills.has(name) && !pending.has(name)),
+		partial: partial || entries.length > maxCatalog };
 }
 
 export function loadSkill(base, scope, name) {
 	if (!validName(name)) return {};
 	const roots = skillRoots(base, scope);
 	let reason;
+	let waiting;
 	for (const [index, location] of roots.entries()) {
 		// The preferred root also takes precedence when its body cannot be loaded.
 		const metadata = index < roots.length - 1 ? skillAt(base, roots, location, name, false) : undefined;
 		if (!metadata || metadata.skill) {
 			const result = skillAt(base, roots, location, name, true);
-			return { ...result, reason: result.reason ?? reason };
+			return result.skill || result.pending ? result : (waiting ?? { ...result, reason: result.reason ?? reason });
 		}
+		if (metadata.pending) waiting ??= metadata;
 		reason ??= metadata.reason;
 	}
-	return { reason };
+	return waiting ?? { reason };
 }
 
 export function manageSkillTrust(home, [action, name, target, hash, ...extra]) {

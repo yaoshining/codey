@@ -59,11 +59,13 @@ const probeSettings = Effect.gen(function* () {
 		assert.ok(learned.get("fixture/fixture-think")?.some((option) =>
 			option.id === "thinking" && option.options?.some(({ id }) => id === "low")));
 		assert.deepEqual(slashCommands, []);
-		assert.deepEqual(skills.map(({ name, path }) => [name, path]), [
+		assert.deepEqual(skills.map(({ name, path }) => [name, path]).sort(), [
 			["ego-browser", "acp://skill/ego-browser"], ["personal-notes", "acp://skill/personal-notes"],
 			["shared-notes", "acp://skill/shared-notes"], ["standard-notes", "acp://skill/standard-notes"],
 		]);
-		assert.equal(skills.find(({ name }) => name === "ego-browser")?.description, "External fixture");
+		assert.equal(skills.find(({ name }) => name === "ego-browser")?.description,
+			mode === "pending-probe" ? "External personal skill · approval required before use" : "External fixture");
+		assert.ok(skills.every(({ description }) => description !== "Unapproved duplicate"));
 	}
 	console.log("PASS: real pinned T3 Settings probe discovered the configured models and per-model effort from /, HOME and the project.");
 }).pipe(Effect.provide(layer));
@@ -90,6 +92,8 @@ const settingsSnapshot = Effect.gen(function* () {
 	);
 	yield* driver.snapshot.refresh;
 	const snapshot = (yield* Fiber.join(next)).value;
+	assert.equal(snapshot.skills?.find(({ name }) => name === "ego-browser")?.description,
+		mode === "pending-probe" ? "External personal skill · approval required before use" : "External fixture");
 	const direct = snapshot.models.find(({ slug }) => slug === "fixture/fixture-one");
 	const custom = snapshot.models.find(({ slug }) => slug === alias);
 	const options = (model) => model.capabilities.optionDescriptors.find(({ id }) => id === "thinking").options.map(({ id }) => id);
@@ -178,6 +182,14 @@ const chat = Effect.gen(function* () {
 	console.log("PASS: pinned T3 Local command adapter negotiated ACP v1, prompted, cold-resumed and cancelled a turn.");
 });
 
+const pendingChat = localCommand((runtime) => Effect.gen(function* () {
+	const thread = yield* runtime.ensureThread({ threadId, modelSelection: selection, runtimePolicy: policy });
+	const expected = "codey acp skills inspect ego-browser";
+	assert.equal(yield* send(runtime, thread, "$ego-browser ", 1, { expected }), "completed");
+	assert.equal(yield* send(runtime, thread, "Apply $ego-browser here", 2, { expected }), "completed");
+	console.log("PASS: pinned T3 Local ACP received local approval instructions for pending skill selections.");
+}));
+
 function sendHandoff(runtime, providerThread, userText, ordinal, historyText, { expected, condensed = false } = {}) {
 	return Effect.gen(function* () {
 		const message = { itemId: `item:history-${ordinal}`, role: "user", threadId, runId: "run:original-pi",
@@ -220,5 +232,7 @@ const handoff = Effect.gen(function* () {
 	console.log("PASS: pinned T3 handoff delivery listed skills locally, retained history on cold resume, and routed only the current unambiguous skill.");
 });
 
-await Effect.runPromise((mode === "probe" ? settingsSnapshot.pipe(Effect.andThen(probeSettings)) : chat.pipe(Effect.andThen(handoff)))
+const scenario = mode === "pending-chat" ? pendingChat : mode === "probe" || mode === "pending-probe"
+	? settingsSnapshot.pipe(Effect.andThen(probeSettings)) : chat.pipe(Effect.andThen(handoff));
+await Effect.runPromise(scenario
 	.pipe(Effect.timeout("210 seconds")));
