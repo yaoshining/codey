@@ -76,3 +76,5 @@ codey sandbox --commit HEAD --image "$image"
 后两种启动方式下，Bash 始终无法写入工作区，工具可使用自身的私有临时目录。Supervised 没有单次写入或联网审批，Auto 和 Full access 均不可用。两种方式共用单独的 ACP 会话存储，恢复时回到 Supervised。原有工作区写入 ACP 聊天应继续用原启动参数恢复。
 
 供客户端验证的实验接口在 `initialize` 的 `agentCapabilities._meta["com.github.yaoshining.codey/sessionPermissions"].modes` 提供可选档位。客户端可在空闲时发送 `_com.github.yaoshining.codey/sessionPermissions/setMode`，参数为 `{ "sessionId": "…", "mode": "auto-accept-edits" }`，成功时返回实际 `mode`。`session/new` 和 `session/load` 的同名 `_meta` 返回当前 `mode`。该接口不在模型选项中公布，当前 T3 Permissions 菜单尚未连接。
+
+**Auto 审查仍未接入。** Codey 的独立审查组件只在合成测试中运行，不提供启动参数或用户配置项。它对已通过确定性边界检查的合成工作区编辑发出单次独立模型请求，只传动作类型、字节数和随机编号，结果仅供参考。ACP 当前没有可绑定到一次具体操作的人工审批通道。终端的 HTTPS 单次人工审批仍限于原有 `https_read`，不交给 Auto 代批。
