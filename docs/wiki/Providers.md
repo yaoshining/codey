@@ -32,11 +32,13 @@ OpenAI Responses 发送 `reasoning.effort`，可选 `minimal`、`low`、`medium`
 
 ### 读取和调整模型上下文与输出上限
 
-在普通 Codey 的 `/provider` 中选择 **Configure model limits**，选已保存的连接与模型。添加或编辑连接时，选好模型后也可以进入此菜单。每一项会显示当前值及来源。**Read gateway limits** 会用当前连接查看目录，缺项时尝试同一 Base URL 下的 `/model/info`。只匹配模型的完整路由 ID。查不到的项会标为未知，继续使用兼容默认值 32,000（上下文）和 4,096（输出）。
+在普通 Codey 的 `/provider` 中选择 **Configure model limits**，选已保存的连接与模型。添加或编辑连接时，选好模型后也可以进入此菜单。每一项会显示当前值及来源，优先使用手动值、网关明确值、随版本附带的 Models.dev 目录。仍查不到时，上下文和输出使用兼容默认值 32,000 和 4,096。
 
-上下文上限是输入与输出合计的 token 数。目录里的 `max_input_tokens` 只说明输入上限，Codey 不把它换算成上下文。Codey 接受语义明确的 `context_window` 或 `context_length`、`max_output_tokens`，以及部分已知目录的输出字段，例如 Anthropic 模型目录的 `max_tokens`。普通 OpenAI 模型列表可能只有模型 ID。 [OpenAI 模型列表](https://developers.openai.com/api/reference/go/resources/models/methods/list) · [Anthropic 模型目录](https://platform.claude.com/docs/en/api/models/list) · [LiteLLM 模型管理](https://docs.litellm.ai/docs/proxy/model_management)
+**Read gateway limits** 会用当前连接查看目录，缺项时尝试同一 Base URL 下的 `/model/info`。它使用完整路由 ID 匹配，读取语义明确的 `context_window`、`context_length`、`max_input_tokens`、`max_output_tokens`，以及 Anthropic 模型目录的 `max_tokens` 等已知字段。总上下文、独立输入上限和输出上限分别记录。独立输入上限供查看，不参与当前 Pi 的请求预算计算，也不与输出相加。 [OpenAI 模型列表](https://developers.openai.com/api/reference/go/resources/models/methods/list) · [Anthropic 模型目录](https://platform.claude.com/docs/en/api/models/list) · [LiteLLM 模型管理](https://docs.litellm.ai/docs/proxy/model_management)
 
-用 **Edit context window** 和 **Edit output limit** 分别填写整数，清空对应输入可恢复自动。手动值优先，重新读取目录不会覆盖它。确认保存后，其他已运行的 Codey、RPC 或 ACP 会话可通过重新启动使用新值。输出还受当前可用上下文约束，接近窗口时请求预算可能低于所填的上限。沙箱 RPC 和 ACP 沿用现有的上下文压缩设置。
+Models.dev 补全只匹配完整的规范 ID，例如 `openai/gpt-6.2-sol`。简称 `gpt-6.2-sol`、网关自定义别名或不同供应商下的同名模型不会借用这条记录。现有配置在启动时即能使用随版本附带的目录，不需要重建或联网。保存上限时会记录目录版本。Models.dev 不接收网关凭据、模型请求或聊天内容。 [Models.dev](https://models.dev/)
+
+用 **Edit context window**、**Edit output limit** 和 **Edit input limit** 分别填写整数，清空对应输入可恢复自动。重新读取目录会保留手动值。确认保存后，其他已运行的 Codey、RPC 或 ACP 会话可通过重新启动使用新值。输出还受当前可用上下文约束，接近窗口时请求预算可能低于所填的上限。沙箱 RPC 和 ACP 沿用现有的上下文压缩设置。
 
 ### 局域网 LiteLLM 使用 HTTP
 

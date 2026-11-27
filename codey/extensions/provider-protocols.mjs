@@ -90,9 +90,13 @@ export function providerFromProfile(profile) {
 	};
 	const source = profile.auth === "none" ? "no authentication (Codey /provider)" : "Codey /provider";
 	const displayName = profile.displayName ?? profile.id;
+	const configuredBudgets = new Set();
 	// Pi's model selector can display a model label alongside the canonical provider ID.
 	const models = profile.models.map((id) => {
 		const { contextWindow, maxTokens } = modelLimitSettings(profile, id);
+		if (contextWindow.source !== "Unknown · compatibility default" || maxTokens.source !== "Unknown · compatibility default") {
+			configuredBudgets.add(id);
+		}
 		const levels = Object.hasOwn(profile.reasoningLevels ?? {}, id) ? profile.reasoningLevels[id] : undefined;
 		const thinkingLevelMap = levels && Object.fromEntries(
 			THINKING_LEVEL_OPTIONS.filter((level) => level !== "off").map((level) => [level, levels.includes(level) ? level : null]),
@@ -126,13 +130,13 @@ export function providerFromProfile(profile) {
 		auth: { apiKey: { name: source, check: async () => ({ type: "api_key", source }), resolve: async () => ({ auth: {}, source }) } },
 		getModels: () => models,
 		stream(model, context, options) {
-			const budget = Object.hasOwn(profile.modelLimits ?? {}, model.id) ? {
+			const budget = configuredBudgets.has(model.id) ? {
 				maxTokens: clampMaxTokensToContext(model, context, Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens)),
 			} : undefined;
 			return streams.stream(requestModel(model), context, requestOptions({ ...options, ...budget }));
 		},
 		streamSimple(model, context, options) {
-			const budget = Object.hasOwn(profile.modelLimits ?? {}, model.id) && options?.maxTokens !== undefined ? {
+			const budget = configuredBudgets.has(model.id) && options?.maxTokens !== undefined ? {
 				maxTokens: Math.min(options.maxTokens, model.maxTokens),
 			} : undefined;
 			return streams.streamSimple(requestModel(model), context, requestOptions({ ...options, ...budget }));
@@ -247,7 +251,7 @@ export function modelInfoUrl(profile) {
 export async function discoverModelLimits(profile, model) {
 	const catalog = await discoverModels(profile);
 	const fromCatalog = catalog.limits?.get(model);
-	if (fromCatalog?.contextWindow && fromCatalog.maxTokens) return { limits: fromCatalog };
+	if (fromCatalog?.contextWindow && fromCatalog.maxTokens && fromCatalog.maxInputTokens) return { limits: fromCatalog, complete: true };
 	const policy = authorizedProviderEndpoint(profile);
 	try {
 		const response = await fetchProvider(modelInfoUrl(profile), {
@@ -259,13 +263,14 @@ export async function discoverModelLimits(profile, model) {
 				"Gateway model info redirected. No redirect was followed." : `Gateway model info returned HTTP ${response.status}.` };
 		}
 		const { data } = await boundedJson(response);
+		if (!Array.isArray(data?.data)) throw new Error("Unsupported model info.");
 		let info;
-		for (const entry of Array.isArray(data?.data) ? data.data : []) {
+		for (const entry of data.data) {
 			if (entry?.model_name !== model) continue;
 			const next = readCatalogLimits(entry, profile.api, true);
 			info = info ? commonModelLimits(info, next) : next;
 		}
-		return { limits: mergeReportedLimits(fromCatalog, info), reason: catalog.partial ? catalog.reason : undefined };
+		return { limits: mergeReportedLimits(fromCatalog, info), complete: !catalog.partial, reason: catalog.partial ? catalog.reason : undefined };
 	} catch {
 		return { limits: fromCatalog ?? {}, reason: "Gateway model info was unavailable or invalid." };
 	}

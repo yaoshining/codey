@@ -95,8 +95,8 @@ def run(binary, t3_fixture=None):
                                       "models": ["openai/gpt-6.2-sol"],
                                       "reasoningLevels": {"openai/gpt-6.2-sol": alias_levels[1:]},
                                       "modelLimits": {"openai/gpt-6.2-sol": {"detected": {
-                                          "contextWindow": {"value": 128000, "source": "Gateway model info"},
-                                          "maxTokens": {"value": 8192, "source": "Gateway model info"},
+                                          "maxInputTokens": {"value": 922000, "source": "Gateway model info"},
+                                          "maxTokens": {"value": 128000, "source": "Gateway model info"},
                                       }}}}))
         profile.chmod(0o600)
         write_skill(agent / "skills", "personal-notes", "Personal fixture", "PERSONAL_SKILL_BODY $ARGUMENTS")
@@ -331,7 +331,7 @@ def run(binary, t3_fixture=None):
                                prompt=[{"type": "text", "text": "alias wire fixture"}])["stopReason"] == "end_turn"
             body, auth = Gateway.responses[-1]
             assert body["model"] == "openai/gpt-6.2-sol" and body["reasoning"]["effort"] == "high"
-            assert body["max_output_tokens"] == 8192
+            assert body["max_output_tokens"] == 128000
             assert auth == "Bearer fake-litellm-key"
             acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             with Acp(binary, args, workspace, env) as competing:
