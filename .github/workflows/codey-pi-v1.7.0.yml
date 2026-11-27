@@ -26,10 +26,10 @@ jobs:
           test "$(git rev-parse HEAD)" = 91797894b67cfa77a6a86314c4a41a50c8a8e225
           env -u SHELL HOME="$RUNNER_TEMP/install-home" CODEY_INSTALL_DIR="$RUNNER_TEMP/codey-installed" CODEY_BIN_DIR="$RUNNER_TEMP/codey-bin" bash ./codey/install.sh 91797894b67cfa77a6a86314c4a41a50c8a8e225
           git -C "$RUNNER_TEMP/codey-installed/91797894b67cfa77a6a86314c4a41a50c8a8e225" rev-parse HEAD
-          test "$("$RUNNER_TEMP/codey-bin/codey" --version)" = 0.1.0
-          test "$("$RUNNER_TEMP/codey-bin/codey" --pi-version)" = 1.7.0
-          "$RUNNER_TEMP/codey-bin/codey" --version
-          "$RUNNER_TEMP/codey-bin/codey" --pi-version
+          test "$(env HOME="$RUNNER_TEMP/install-home" PI_OFFLINE=1 "$RUNNER_TEMP/codey-bin/codey" --version)" = 0.1.0
+          test "$(env HOME="$RUNNER_TEMP/install-home" PI_OFFLINE=1 "$RUNNER_TEMP/codey-bin/codey" --pi-version)" = 1.7.0
+          env HOME="$RUNNER_TEMP/install-home" PI_OFFLINE=1 "$RUNNER_TEMP/codey-bin/codey" --version
+          env HOME="$RUNNER_TEMP/install-home" PI_OFFLINE=1 "$RUNNER_TEMP/codey-bin/codey" --pi-version
       - name: Verify real provider menu and captured ordinary and Seatbelt RPC requests
         run: |
           python3 -m venv "$RUNNER_TEMP/provider-test-python"
@@ -54,4 +54,5 @@ jobs:
       - name: Regress existing Pi RPC and Seatbelt
         run: python3 codey/sandbox/macos/rpc.integration.py "$RUNNER_TEMP/codey-bin/codey"
       - name: Test the Seatbelt terminal, approval and inline review
-        run: "$RUNNER_TEMP/provider-test-python/bin/python" codey/sandbox/macos/integration.py "$RUNNER_TEMP/codey-bin/codey"
+        run: |
+          "$RUNNER_TEMP/provider-test-python/bin/python" codey/sandbox/macos/integration.py "$RUNNER_TEMP/codey-bin/codey"
