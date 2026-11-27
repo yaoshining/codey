@@ -2,11 +2,13 @@
 
 import json
 import os
+import re
 import runpy
 import sys
 import tempfile
 import time
 from http.server import ThreadingHTTPServer
+from io import StringIO
 from pathlib import Path
 from threading import Thread
 
@@ -17,6 +19,18 @@ ROOT = Path(__file__).resolve().parents[1]
 Rpc = runpy.run_path(str(ROOT / "sandbox/macos/rpc.integration.py"))["Rpc"]
 ResponsesGateway = runpy.run_path(str(Path(__file__).with_name("provider-reasoning.integration.py")))["Gateway"]
 ROUTE = "vendor/fixture"
+
+
+class Terminal(pexpect.spawn):
+    def __enter__(self):
+        self.logfile_read = StringIO()
+        return super().__enter__()
+
+    def __exit__(self, error, *args):
+        if error:
+            trace = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", self.logfile_read.getvalue())
+            print("\n".join(line.rstrip() for line in trace.splitlines() if line.strip())[-4000:], file=sys.stderr)
+        return super().__exit__(error, *args)
 
 
 class Gateway(ResponsesGateway):
@@ -58,7 +72,7 @@ def run(binary, include_sandbox=False):
         env = {"HOME": str(home), "PATH": os.environ["PATH"], "TERM": "xterm-256color",
                "NO_COLOR": "1", "PI_SKIP_VERSION_CHECK": "1"}
 
-        with pexpect.spawn(binary, ["--no-session", "--offline", "--provider", "relay", "--model", ROUTE],
+        with Terminal(binary, ["--no-session", "--offline", "--provider", "relay", "--model", ROUTE],
                            cwd=project, env=env, encoding="utf-8", timeout=30, dimensions=(55, 200)) as tty:
             def enter(text="", down=0):
                 if text:
@@ -88,12 +102,21 @@ def run(binary, include_sandbox=False):
                 original_bytes = file.read_bytes()
                 tty.expect_exact("Keep model limits")
                 enter(down=3)
+                tty.expect_exact("Save token limits for")
                 tty.expect_exact("Save model limits")
-                enter(down=int(confirm))
+                tty.expect_exact("\x1b[?2026l")
+                if confirm:
+                    tty.send("\x1b[B")
+                    tty.expect(r"→ (?:\x1b\[[0-9;]+m)*Save model limits")
+                enter()
                 if confirm:
                     deadline = time.monotonic() + 10
                     while file.read_bytes() == original_bytes and time.monotonic() < deadline:
-                        time.sleep(.05)
+                        # A macOS PTY can block rendering until output is consumed.
+                        try:
+                            tty.read_nonblocking(size=4096, timeout=.15)
+                        except pexpect.TIMEOUT:
+                            pass
                     assert file.read_bytes() != original_bytes, "The confirmed changes were not saved."
                 time.sleep(.25)
 
