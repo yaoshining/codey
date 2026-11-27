@@ -44,6 +44,8 @@ Codey 通过 stdio 协商 ACP v1，支持文本流、模型和推理档位、停
 
 在 T3 设置中刷新此 provider，可读取普通 Codey 已配置的模型和每个模型的推理档位。通过 `/provider` 添加的模型在 ACP 列表中直接显示网关模型 ID，例如 `openai/gpt-6.2-sol`，选择仍使用包含 provider 的完整 ID。设置页从 T3 服务目录探测模型和个人技能名称、描述。要开始对话，请打开实际项目，让 Codey 在该项目启动 Seatbelt。
 
+Codey ACP 在 `configOptions` 的模型选项与兼容的 `models.availableModels` 条目中提供可选扩展 `_meta["com.github.yaoshining.codey/subProvider"]`。值是 `{ "id": "litellm", "displayName": "LiteLLM" }` 这类对象，来自已通过校验的 `/provider` 配置。`displayName` 可供客户端画尾标。Settings 探测和普通会话使用相同字段，模型 `name` 保持 `openai/gpt-6.2-sol`，选择值仍是 `litellm/openai/gpt-6.2-sol`。扩展仅包含提供商 ID 和显示名。当前 T3 Local ACP adapter 尚未映射该扩展，需要客户端接入后才有灰色尾标。
+
 #### 在 T3 中使用 Codey 技能
 
 - 个人技能可放在 `~/.agents/skills/<name>/SKILL.md` 或 `~/.codey/agent/skills/<name>/SKILL.md`，同名时优先使用 Codey 目录。刷新 Local ACP provider 后，在对话框输入 `$` 查找并点选技能。如果 T3 已开启在 `/` 菜单显示技能，也可从那里点选。

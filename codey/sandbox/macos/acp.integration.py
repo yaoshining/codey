@@ -15,7 +15,8 @@ from threading import Thread
 fixtures = runpy.run_path(str(Path(__file__).with_name("rpc.integration.py")))
 Model, Rpc = fixtures["Model"], fixtures["Rpc"]
 args = ["acp", "--sandbox=workspace-write"]
-alias = "litellm/openai/fixture-one"
+alias = "litellm/openai/gpt-6.2-sol"
+sub_provider_key = "com.github.yaoshining.codey/subProvider"
 pending_skill = {"name": "$ego-browser", "description": "External personal skill · approval required before use"}
 
 
@@ -89,10 +90,10 @@ def run(binary, t3_fixture=None):
         profiles = agent / "custom-providers"
         profiles.mkdir(mode=0o700)
         profile = profiles / "litellm.json"
-        profile.write_text(json.dumps({"displayName": "LiteLLM", "api": "openai-responses",
+        profile.write_text(json.dumps({"displayName": "LiteLLM-Test", "api": "openai-responses",
                                       "auth": "key", "key": "fake-litellm-key", "baseUrl": endpoint + "/v1",
-                                      "models": ["openai/fixture-one"],
-                                      "reasoningLevels": {"openai/fixture-one": alias_levels[1:]}}))
+                                      "models": ["openai/gpt-6.2-sol"],
+                                      "reasoningLevels": {"openai/gpt-6.2-sol": alias_levels[1:]}}))
         profile.chmod(0o600)
         write_skill(agent / "skills", "personal-notes", "Personal fixture", "PERSONAL_SKILL_BODY $ARGUMENTS")
         standard = home / ".agents/skills"
@@ -173,6 +174,20 @@ def run(binary, t3_fixture=None):
         trust_command("trust", "ego-browser", external, expected_pin["sha256"])
         assert not (agent / "skills/ego-browser").exists() and (standard / "ego-browser").is_symlink()
         subprocess.run(["/usr/bin/curl", "--silent", "--noproxy", "*", endpoint + "/probe"], check=True, env=env)
+        def model_metadata(result):
+            config = next(option for option in result["configOptions"] if option["id"] == "model")
+            options = {item["value"]: item for item in config["options"]}
+            tag = {"id": "litellm", "displayName": "LiteLLM-Test"}
+            assert options[alias] == {"value": alias, "name": "openai/gpt-6.2-sol", "_meta": {sub_provider_key: tag}}
+            assert sub_provider_key not in options["fixture/fixture-one"].get("_meta", {})
+            if "models" in result:
+                entries = result["models"]["availableModels"]
+                assert [item["modelId"] for item in entries] == list(options)
+                compat = next(item for item in entries if item["modelId"] == alias)
+                assert compat["name"] == "openai/gpt-6.2-sol" and compat["_meta"][sub_provider_key] == tag
+                assert [item["value"] for item in compat["_meta"]["reasoningEfforts"]] == alias_levels
+            assert all(secret not in str(result) for secret in (endpoint, "fake-litellm-key", "acp-fixture-key", "baseUrl", "Authorization"))
+            return list(options)
         for directory in ("/", str(home), str(workspace)):
             with Acp(binary, args, directory, env) as probe:
                 caps = probe.request("initialize", protocolVersion=2,
@@ -181,13 +196,14 @@ def run(binary, t3_fixture=None):
                 assert not caps.get("loadSession") and caps["sessionCapabilities"]["delete"] == {}
                 setup = {"cwd": directory, "mcpServers": []}
                 result = probe.request("session/new", **setup)
+                expected_model_order = model_metadata(result)
                 sid = result["sessionId"]
                 assert {option["value"] for option in result["configOptions"][0]["options"]} == {
                     "fixture/fixture-one", "fixture/fixture-think", alias
                 }
                 assert result["models"]["currentModelId"] == "fixture/fixture-one"
                 catalog = {entry["modelId"]: entry for entry in result["models"]["availableModels"]}
-                assert catalog[alias]["name"] == "openai/fixture-one"
+                assert catalog[alias]["name"] == "openai/gpt-6.2-sol"
                 assert [item["value"] for item in catalog[alias]["_meta"]["reasoningEfforts"]] == alias_levels
                 assert catalog["fixture/fixture-one"]["_meta"]["reasoningEfforts"] == [{"value": "off", "label": "off"}]
                 probe.request("session/set_config_option", sessionId=sid, configId="model", value="fixture/fixture-think")
@@ -234,6 +250,7 @@ def run(binary, t3_fixture=None):
             ]})
             session_id = result["sessionId"]
             assert "/" not in session_id
+            assert model_metadata(result) == expected_model_order
             files = list((agent / "sandbox-acp").glob("*/*.jsonl"))
             assert len(files) == 1 and files[0].name == session_id and files[0].stat().st_mode & 0o777 == 0o600
             assert len(result["configOptions"][0]["options"]) == 3
@@ -303,12 +320,13 @@ def run(binary, t3_fixture=None):
             assert acp.request("session/prompt", sessionId=session_id, prompt=[{"type": "text", "text": "slow fixture"}])["stopReason"] == "cancelled"
             Model.release.set()
             changed = acp.request("session/set_config_option", sessionId=session_id, configId="model", value=alias)
+            assert model_metadata(changed) == expected_model_order
             assert [option["value"] for option in changed["configOptions"][1]["options"]] == alias_levels
             acp.request("session/set_config_option", sessionId=session_id, configId="thinking", value="high")
             assert acp.request("session/prompt", sessionId=session_id,
                                prompt=[{"type": "text", "text": "alias wire fixture"}])["stopReason"] == "end_turn"
             body, auth = Gateway.responses[-1]
-            assert body["model"] == "openai/fixture-one" and body["reasoning"]["effort"] == "high"
+            assert body["model"] == "openai/gpt-6.2-sol" and body["reasoning"]["effort"] == "high"
             assert auth == "Bearer fake-litellm-key"
             acp.request("session/set_config_option", sessionId=session_id, configId="model", value="fixture/fixture-think")
             with Acp(binary, args, workspace, env) as competing:
@@ -318,6 +336,7 @@ def run(binary, t3_fixture=None):
             resumed.initialize()
             assert resumed.request("session/load", sessionId=str(files[0]), **setup, succeeds=False)["code"] == -32602
             state = resumed.request("session/load", sessionId=session_id, **setup)
+            assert model_metadata(state) == expected_model_order
             assert state["configOptions"][0]["currentValue"] == "fixture/fixture-think"
             assert any("boundary fixture" in str(frame.get("params", {})) for frame in resumed.seen)
             assert resumed.request("session/prompt", sessionId=session_id,

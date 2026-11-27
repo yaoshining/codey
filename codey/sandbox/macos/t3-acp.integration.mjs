@@ -31,7 +31,7 @@ const selection = { instanceId: "acpRegistry", model: "fixture/fixture-think", o
 const policy = { cwd, runtimeMode: "approval-required", interactionMode: "default" };
 const environment = { HOME: process.env.HOME, PATH: process.env.PATH, PI_SKIP_VERSION_CHECK: "1" };
 const node = Layer.merge(NodeServices.layer, NodeCrypto.layer);
-const alias = "litellm/openai/fixture-one";
+const alias = "litellm/openai/gpt-6.2-sol";
 const services = Layer.mergeAll(node, IdAllocator.layer, McpProviderSessions.layer,
 	TestProviderHost.layer({ cwd: "/", runBackgroundWork: false }).pipe(Layer.provide(node)),
 	Layer.succeed(HostProcess.Environment, environment),
@@ -101,7 +101,9 @@ const settingsSnapshot = Effect.gen(function* () {
 	assert.deepEqual(options(direct), ["off"]);
 	assert.equal(custom.isDefault ?? false, false);
 	assert.deepEqual(options(custom), ["off", "low", "medium", "high", "xhigh", "max"]);
-	assert.equal(custom.name, "openai/fixture-one");
+	assert.equal(custom.name, "openai/gpt-6.2-sol");
+	// This pinned registry projects known model fields and drops the ACP display extension.
+	assert.equal(custom.subProvider, undefined);
 	console.log("PASS: real T3 Local ACP driver snapshot replaced stale off-only metadata for the non-default alias before a turn.");
 }).pipe(Effect.scoped, Effect.provide(layer));
 
