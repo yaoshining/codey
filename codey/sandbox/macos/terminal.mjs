@@ -88,6 +88,7 @@ async function launch() {
 	const { values } = parseArgs({
 		options: {
 			sandbox: { type: "string" },
+			"acp-permissions": { type: "boolean" },
 			workspace: { type: "string" },
 			mode: { type: "string" },
 			session: { type: "string" },
@@ -106,14 +107,16 @@ async function launch() {
 		},
 	});
 	if (acp) {
-		const acpHelp = "Usage: codey acp --sandbox=workspace-write [--workspace <directory>] [--provider <name> --model <id>]\n       codey acp skills --help";
+		const acpHelp = "Usage: codey acp --sandbox=workspace-write [--acp-permissions] [--workspace <directory>] [--provider <name> --model <id>]\n       codey acp --sandbox=read-only [--workspace <directory>] [--provider <name> --model <id>]\n       codey acp skills --help";
 		if (values.help) return console.log(acpHelp);
-		if (values.sandbox !== "workspace-write") throw new Error(acpHelp);
-		if (Object.keys(values).some((key) => !["sandbox", "workspace", "provider", "model"].includes(key))) {
+		if (!["workspace-write", "read-only"].includes(values.sandbox)) throw new Error(acpHelp);
+		if (Object.keys(values).some((key) => !["sandbox", "acp-permissions", "workspace", "provider", "model"].includes(key))) {
 			throw new Error("Unsupported option for Codey ACP.");
 		}
+	} else if (values["acp-permissions"] || values.sandbox !== "workspace-write") {
+		throw new Error(help);
 	}
-	if (values.sandbox !== "workspace-write") throw new Error(help);
+	const permissionCeiling = acp && (values.sandbox === "read-only" || values["acp-permissions"]) ? values.sandbox : undefined;
 	if (values.help) return console.log(help);
 	const rpc = values.mode === "rpc";
 	if (values.mode !== undefined && !rpc) throw new Error("Only --mode rpc is supported with workspace-write.");
@@ -145,7 +148,7 @@ async function launch() {
 		}
 		return;
 	}
-	if (process.platform !== "darwin") throw new Error("workspace-write requires macOS Seatbelt. No tool was run.");
+	if (process.platform !== "darwin") throw new Error(`${values.sandbox} requires macOS Seatbelt. No tool was run.`);
 	if (!rpc && !acp && (!process.stdin.isTTY || !process.stdout.isTTY)) throw new Error("An interactive Codey terminal is required. Use --mode rpc for JSONL.");
 	if (Boolean(values.provider) !== Boolean(values.model)) throw new Error("Specify --provider and --model together.");
 
@@ -166,7 +169,7 @@ async function launch() {
 		if (!metadataOnly) {
 			workspace = realpathSync(resolve(values.workspace ?? process.cwd()));
 			if (!lstatSync(workspace).isDirectory()) throw new Error("The workspace must be a directory.");
-			initial = await openSeatbelt(workspace, home, signal);
+			initial = await openSeatbelt(workspace, home, signal, { permissionCeiling });
 		}
 		hostDir = mkdtempSync("/private/tmp/codey-sandbox-model-");
 		// Even ambient credential checks must not resolve relative paths from the probe caller's cwd.
@@ -212,11 +215,18 @@ async function launch() {
 			});
 		};
 		return { workspace, runtime, model, newSession, defaultThinkingLevel, managedProviders,
-			...(acp ? { runProjectSkill: initial.execute } : {}),
-			createSession: (manager, currentModel) => newSession(workspace, initial, manager, currentModel) };
+			...(acp ? { runProjectSkill: initial.executeReadOnly ?? initial.execute } : {}),
+			createSession: (manager, currentModel, permission) => newSession(workspace, permission ? {
+				execute: (name, args, signal) => {
+					// Bash stays read-only in both modes, including any surviving child process.
+					const execute = permission.mode === "auto-accept-edits" && (name === "edit" || name === "write")
+						? initial.execute : initial.executeReadOnly;
+					return execute(name, args, signal);
+				},
+			} : initial, manager, currentModel) };
 	}
 	try {
-		if (acp) return await runSandboxAcp({ home, prepare, wireWrite });
+		if (acp) return await runSandboxAcp({ home, prepare, wireWrite, permissionCeiling });
 		const { workspace, model, newSession } = await prepare(false, startup.signal);
 		if (rpc) {
 			startup.signal.throwIfAborted();

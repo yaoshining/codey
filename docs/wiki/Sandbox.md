@@ -63,4 +63,16 @@ codey sandbox --commit HEAD --image "$image"
 
 ### macOS 沙箱 ACP
 
-运行 `codey acp --sandbox=workspace-write` 可由 ACP 客户端通过 stdio 启动 Codey。该入口只支持 macOS Seatbelt。工具在启动时确定的单个工作目录内运行，工具网络始终关闭。工具权限由 Seatbelt 固定，ACP 不接入 T3 的逐次审批、MCP、文件系统或终端回调。附件、嵌入资源、额外工作目录和项目扩展不受支持。登录需在普通终端启动 `codey` 后输入 `/login`。T3 配置见 [ACP Local command](Workflow.md#t3-的-acp-local-command)。
+运行 `codey acp --sandbox=workspace-write` 可由 ACP 客户端通过 stdio 启动 Codey。该入口只支持 macOS Seatbelt。工具在启动时确定的单个工作目录内运行，工具网络始终关闭。ACP 不接入 T3 的逐次审批、MCP、文件系统或终端回调。附件、嵌入资源、额外工作目录和项目扩展不受支持。登录需在普通终端启动 `codey` 后输入 `/login`。T3 配置见 [ACP Local command](Workflow.md#t3-的-acp-local-command)。
+
+#### ACP 权限
+
+| 启动参数 | 新建与恢复时的权限 | 支持的切换 |
+| --- | --- | --- |
+| `--sandbox=workspace-write` | 现有的工作区写入策略 | 固定 |
+| `--sandbox=read-only` | Supervised，项目文件只读 | 固定只读 |
+| `--sandbox=workspace-write --acp-permissions` | Supervised，项目文件只读 | 兼容客户端可切换到 Auto-accept edits，允许 `write` 和 `edit` 修改工作区内允许写入的文件 |
+
+后两种启动方式下，Bash 始终无法写入工作区，工具可使用自身的私有临时目录。Supervised 没有单次写入或联网审批，Auto 和 Full access 均不可用。两种方式共用单独的 ACP 会话存储，恢复时回到 Supervised。原有工作区写入 ACP 聊天应继续用原启动参数恢复。
+
+供客户端验证的实验接口在 `initialize` 的 `agentCapabilities._meta["com.github.yaoshining.codey/sessionPermissions"].modes` 提供可选档位。客户端可在空闲时发送 `_com.github.yaoshining.codey/sessionPermissions/setMode`，参数为 `{ "sessionId": "…", "mode": "auto-accept-edits" }`，成功时返回实际 `mode`。`session/new` 和 `session/load` 的同名 `_meta` 返回当前 `mode`。该接口不在模型选项中公布，当前 T3 Permissions 菜单尚未连接。

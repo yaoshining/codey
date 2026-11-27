@@ -14,9 +14,11 @@ export class SandboxRpcResumeError extends Error {}
 const newThread = "Start a new, empty T3 chat with the sandbox enabled.";
 
 export const sandboxRpcSessions = (home, workspace, ephemeral) => sandboxSessions(home, workspace, ephemeral, false);
-export const sandboxAcpSessions = (home, workspace) => sandboxSessions(home, workspace, false, true);
+export const sandboxAcpSessions = (home, workspace, managedPermissions) => sandboxSessions(
+	home, workspace, false, true, managedPermissions ? "sandbox-acp-permissions" : "sandbox-acp",
+);
 
-function sandboxSessions(home, workspace, ephemeral, acp) {
+function sandboxSessions(home, workspace, ephemeral, acp, storeName = "sandbox-rpc") {
 	const guidance = acp ? "Start a new Codey ACP chat in this workspace." : newThread;
 	if (ephemeral) return (path) => {
 		if (path !== undefined) throw new SandboxRpcResumeError(`Ephemeral sandbox sessions cannot be reopened. ${newThread}`);
@@ -24,7 +26,7 @@ function sandboxSessions(home, workspace, ephemeral, acp) {
 	};
 	const codey = join(home, ".codey");
 	const agent = join(codey, "agent");
-	const store = join(agent, acp ? "sandbox-acp" : "sandbox-rpc");
+	const store = join(agent, storeName);
 	const directory = join(store, createHash("sha256").update(workspace).digest("hex"));
 	if (contains(workspace, store) || contains(store, workspace)) throw new Error("Choose a workspace outside the sandbox session store.");
 	process.umask(0o077);

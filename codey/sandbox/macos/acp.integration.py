@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 from http.server import ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 
 
 fixtures = runpy.run_path(str(Path(__file__).with_name("rpc.integration.py")))
@@ -70,6 +70,151 @@ class Acp(Rpc):
                               clientCapabilities={"fs": {"readTextFile": True}, "terminal": True})
         assert result["protocolVersion"] == 1 and result["agentCapabilities"]["loadSession"]
         assert result["agentInfo"]["name"] == "codey" and not result["agentCapabilities"].get("mcpCapabilities")
+
+
+class PermissionsModel(Model):
+    started = Event()
+    completed = Event()
+    calls = {}
+    tool_result = ""
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        latest = max(i for i, item in enumerate(body["messages"]) if item["role"] == "user")
+        message = body["messages"][latest]["content"]
+        if isinstance(message, list):
+            message = next(block["text"] for block in message if block["type"] == "text")
+        results = [item["content"] for item in body["messages"][latest:] if item["role"] == "tool"]
+        delta, finish = {"role": "assistant", "content": "OK"}, "stop"
+        if message in self.calls and not results:
+            name, inputs = self.calls[message]
+            delta = {"role": "assistant", "tool_calls": [{"index": 0, "type": "function", "id": "permission_fixture",
+                     "function": {"name": name, "arguments": json.dumps(inputs)}}]}
+            finish = "tool_calls"
+        if results:
+            type(self).tool_result = str(results[-1])
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        if message == "hold":
+            self.started.set()
+            self.completed.wait(15)
+        try:
+            for payload, reason in [(delta, None), ({}, finish)]:
+                chunk = {"id": "permissions-fixture", "object": "chat.completion.chunk", "created": 1,
+                         "model": body["model"], "choices": [{"index": 0, "delta": payload, "finish_reason": reason}]}
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+def run_permissions(binary):
+    key = "com.github.yaoshining.codey/sessionPermissions"
+    method = "_" + key + "/setMode"
+    supervised, auto_accept = "approval-required", "auto-accept-edits"
+    managed = [*args, "--acp-permissions"]
+    with tempfile.TemporaryDirectory(prefix="codey-acp-permissions-") as temp, ThreadingHTTPServer(("127.0.0.1", 0), PermissionsModel) as server:
+        root = Path(temp).resolve()
+        home, workspace, other = (root / name for name in ("home", "project", "other"))
+        for folder in (home, workspace, other):
+            folder.mkdir()
+        note, outside, protected = workspace / "note.txt", other / "note.txt", workspace / ".env"
+        git_marker = workspace / ".git/fixture"
+        git_marker.parent.mkdir()
+        for file, data in ((note, "initial"), (outside, "outside"), (protected, "protected"), (git_marker, "git")):
+            file.write_text(data)
+        agent = home / ".codey/agent"
+        agent.mkdir(parents=True)
+        endpoint = f"http://127.0.0.1:{server.server_port}"
+        (agent / "models.json").write_text(json.dumps({"providers": {"fixture": {
+            "api": "openai-completions", "apiKey": "fixture", "baseUrl": endpoint + "/v1",
+            "models": [{"id": "fixture-one"}],
+        }}}))
+        PermissionsModel.calls = {
+            "read file": ("read", {"path": "note.txt"}),
+            "write file": ("write", {"path": "note.txt", "content": "changed"}),
+            "edit file": ("edit", {"path": "note.txt", "edits": [{"oldText": "changed", "newText": "edited"}]}),
+            "protected file": ("write", {"path": ".env", "content": "should be denied"}),
+            "git file": ("write", {"path": ".git/fixture", "content": "should be denied"}),
+            "outside file": ("write", {"path": str(outside), "content": "should be denied"}),
+            "shell file": ("bash", {"command": "/bin/echo shell > note.txt"}),
+            "network test": ("bash", {"command": f"/usr/bin/curl --noproxy '*' --max-time 2 {endpoint}/fixture"}),
+        }
+        Thread(target=server.serve_forever, daemon=True).start()
+        env = {"HOME": str(home), "PATH": os.environ["PATH"], "PI_SKIP_VERSION_CHECK": "1"}
+        setup = {"cwd": str(workspace), "mcpServers": []}
+        subprocess.run(["/usr/bin/curl", "--silent", "--noproxy", "*", "--max-time", "5", endpoint + "/fixture"], check=True, env=env)
+        probes = Model.probes
+
+        def initialize(client):
+            return client.request("initialize", protocolVersion=1)["agentCapabilities"].get("_meta", {}).get(key)
+
+        def prompt(client, sid, message):
+            return client.request("session/prompt", sessionId=sid, prompt=[{"type": "text", "text": message}])
+
+        with Acp(binary, managed, workspace, env) as client:
+            assert initialize(client) == {"modes": [supervised, auto_accept]}
+            result = client.request("session/new", **setup)
+            sid = result["sessionId"]
+            assert result["_meta"][key]["mode"] == supervised
+            assert {option["id"] for option in result["configOptions"]} == {"model", "thinking"}
+            assert client.request(method, sessionId="foreign", mode=auto_accept, succeeds=False)["code"] == -32602
+            for mode in ("auto", "full-access", "invalid", None):
+                assert client.request(method, sessionId=sid, mode=mode, succeeds=False)["code"] == -32602
+            prompt(client, sid, "read file")
+            assert "initial" in PermissionsModel.tool_result
+            prompt(client, sid, "write file")
+            prompt(client, sid, "shell file")
+            assert note.read_text() == "initial"
+            client.send({"jsonrpc": "2.0", "id": "hold", "method": "session/prompt", "params": {
+                "sessionId": sid, "prompt": [{"type": "text", "text": "hold"}],
+            }})
+            try:
+                assert PermissionsModel.started.wait(10)
+                assert client.request(method, sessionId=sid, mode=auto_accept, succeeds=False)["code"] == -32600
+                assert client.request("session/new", succeeds=False, **setup)["code"] == -32600
+                client.send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}})
+                assert client.until(lambda frame: frame.get("id") == "hold")["result"]["stopReason"] == "cancelled"
+            finally:
+                PermissionsModel.completed.set()
+            prompt(client, sid, "write file")
+            assert note.read_text() == "initial"
+            assert client.request(method, sessionId=sid, mode=auto_accept) == {"mode": auto_accept}
+            prompt(client, sid, "write file")
+            prompt(client, sid, "edit file")
+            assert note.read_text() == "edited"
+            for message in ("protected file", "git file", "outside file", "shell file", "network test"):
+                prompt(client, sid, message)
+            assert (note.read_text(), outside.read_text(), protected.read_text()) == ("edited", "outside", "protected")
+            assert git_marker.read_text() == "git"
+            assert Model.probes == probes
+            assert client.request(method, sessionId=sid, mode=supervised) == {"mode": supervised}
+            prompt(client, sid, "write file")
+            assert note.read_text() == "edited"
+            client.request(method, sessionId=sid, mode=auto_accept)
+            assert client.request("session/load", sessionId=sid, **setup)["_meta"][key]["mode"] == supervised
+            client.request(method, sessionId=sid, mode=auto_accept)
+
+        for flags, modes in ((managed, [supervised, auto_accept]), (["acp", "--sandbox=read-only"], [supervised])):
+            with Acp(binary, flags, workspace, env) as client:
+                assert initialize(client) == {"modes": modes}
+                assert client.request("session/load", sessionId=sid, **setup)["_meta"][key]["mode"] == supervised
+                if modes == [supervised]:
+                    assert client.request(method, sessionId=sid, mode=auto_accept, succeeds=False)["code"] == -32602
+                prompt(client, sid, "write file")
+                assert note.read_text() == "edited"
+        with Acp(binary, args, workspace, env) as client:
+            assert initialize(client) is None
+            client.request("session/load", sessionId=sid, **setup, succeeds=False)
+            legacy = client.request("session/new", **setup)["sessionId"]
+            assert client.request(method, sessionId=legacy, mode=supervised, succeeds=False)["code"] == -32601
+            prompt(client, legacy, "shell file")
+            assert note.read_text() == "shell\n"
+        with Acp(binary, managed, other, env) as client:
+            initialize(client)
+            client.request("session/load", sessionId=sid, cwd=str(other), mcpServers=[], succeeds=False)
+        print("PASS: managed ACP permissions, Seatbelt file and network limits, parallel requests, cancel, cold resume and legacy ACP.", flush=True)
 
 
 def run(binary, t3_fixture=None):
@@ -409,4 +554,7 @@ def run(binary, t3_fixture=None):
 
 
 if __name__ == "__main__":
-    run(str(Path(sys.argv[1]).absolute()), *sys.argv[2:])
+    executable = str(Path(sys.argv[1]).absolute())
+    if sys.argv[2:] != ["--permissions-only"]:
+        run(executable, *sys.argv[2:])
+    run_permissions(executable)

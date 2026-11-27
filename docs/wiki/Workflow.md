@@ -42,6 +42,8 @@ codey worktree delete <id>
 
 Codey 通过 stdio 协商 ACP v1，支持文本流、模型和推理档位、停止对话以及在同一工作目录恢复。ACP 会话与 Pi RPC 和普通 Codey 会话分开保存。使用相同的 provider 和工作目录重新打开已建立的 ACP 聊天即可续接。
 
+**Permissions 菜单尚未接线。** T3 Beta 0.1.13 的 Local command adapter 不会把主界面的四档选择发送给 Codey。原有 `--sandbox=workspace-write` 启动参数下，即使界面显示 Supervised，工具仍可编辑工作区内允许写入的文件。如果需要固定只读，另建一条使用 `acp` 和 `--sandbox=read-only` 的 Local command 配置，再新建聊天。Codey 按启动配置执行，工具网络始终关闭。[ACP 权限选项](Sandbox.md#acp-权限)
+
 在 T3 设置中刷新此 provider，可读取普通 Codey 已配置的模型和每个模型的推理档位。通过 `/provider` 添加的模型在 ACP 列表中直接显示网关模型 ID，例如 `openai/gpt-6.2-sol`，选择仍使用包含 provider 的完整 ID。设置页从 T3 服务目录探测模型和个人技能名称、描述。要开始对话，请打开实际项目，让 Codey 在该项目启动 Seatbelt。
 
 Codey ACP 在 `configOptions` 的模型选项与兼容的 `models.availableModels` 条目中提供可选扩展 `_meta["com.github.yaoshining.codey/subProvider"]`。值是 `{ "id": "litellm", "displayName": "LiteLLM" }` 这类对象，来自已通过校验的 `/provider` 配置。`displayName` 可供客户端画尾标。Settings 探测和普通会话使用相同字段，模型 `name` 保持 `openai/gpt-6.2-sol`，选择值仍是 `litellm/openai/gpt-6.2-sol`。扩展仅包含提供商 ID 和显示名。当前 T3 Local ACP adapter 尚未映射该扩展，需要客户端接入后才有灰色尾标。
